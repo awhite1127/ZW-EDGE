@@ -1,0 +1,196 @@
+{{define "content"}}
+{{/* 单设备历史页：展示设备上下文、可选点位和后端已经聚合的趋势数据。 */}}
+<section class="panel tech-frame device-history-head">
+    <header class="subpage-header device-history-toolbar subpage-toolbar-compact">
+        <div class="subpage-header-top">
+            <a class="subpage-back-button" data-navigation-link href="{{.BackURL}}" aria-label="返回历史数据" title="返回历史数据"><span class="subpage-back-icon" aria-hidden="true"><svg class="ui-icon"><use href="#icon-back"></use></svg></span><span>返回历史数据</span></a>
+            <div class="module-tools toolbar-strip">
+                {{if .DeviceID}}
+                {{if .IsAdmin}}<a class="btn btn-small btn-secondary" href="{{.ExportURL}}">导出 CSV</a>{{end}}
+                <a class="btn btn-small" data-navigation-link href="/device-history?device_id={{urlQuery .DeviceID}}&point_key={{urlQuery .CurrentPointKey}}&period={{urlQuery .CurrentPeriod}}&return={{urlQuery .BackURL}}">刷新</a>
+                {{end}}
+            </div>
+        </div>
+    </header>
+
+    {{if .HistoryState.ErrorMessage}}
+    <span hidden data-initial-toast data-toast-type="error" data-toast-message="{{.HistoryState.ErrorMessage}}"></span>
+    {{end}}
+
+    {{if .HasDevice}}
+    <div class="history-device-summary">
+        <div class="history-device-facts">
+            <div><span>设备</span><strong>{{defaultText .DeviceName}}</strong></div>
+            <div><span>主站</span><strong>{{defaultText .MasterName}}</strong></div>
+            <div><span>通道</span><strong>{{defaultText .ChannelName}}</strong></div>
+            <div><span>数据项</span><strong>{{defaultText .CurrentPointName}}{{if .CurrentPointUnit}} / {{.CurrentPointUnit}}{{end}}</strong></div>
+            {{if .MasterAddressText}}<div><span>主站地址</span><strong>{{.MasterAddressText}}</strong></div>{{end}}
+        </div>
+        <div class="history-controls">
+            <div class="history-period-tabs">
+                {{range .PeriodOptions}}
+                <a class="history-period-tab {{if .Selected}}active{{end}}" data-navigation-link href="{{.URL}}&return={{urlQuery $.BackURL}}">{{.Label}}</a>
+                {{end}}
+            </div>
+            <form class="history-point-form" method="get" action="/device-history">
+                <input type="hidden" name="device_id" value="{{.DeviceID}}">
+                <input type="hidden" name="period" value="{{.CurrentPeriod}}">
+                <input type="hidden" name="return" value="{{.BackURL}}">
+                <label class="form-field compact-field">
+                    <span class="field-label">当前数据项</span>
+                    <select name="point_key" data-history-point-selector>
+                        {{range .AvailablePoints}}
+                        <option value="{{.Key}}" {{if .Selected}}selected{{end}}>{{.Name}}</option>
+                        {{else}}
+                        <option value="">暂无数据项</option>
+                        {{end}}
+                    </select>
+                </label>
+            </form>
+        </div>
+    </div>
+    {{end}}
+</section>
+
+{{if .HasDevice}}
+<section class="grid metrics-grid history-summary-grid">
+    <article class="metric-card tech-frame">
+        <span class="metric-label">最新历史值</span>
+        <div class="metric-value">{{if .Summary.HasData}}{{.Summary.LatestValueText}}{{else}}--{{end}}</div>
+        <p class="metric-note">{{if .Summary.HasData}}{{.Summary.LatestDate}} · {{.Summary.RecordCount}} 条{{else}}暂无记录{{end}}</p>
+    </article>
+    <article class="metric-card tech-frame">
+        <span class="metric-label">{{.CurrentPeriodLabel}}最大值</span>
+        <div class="metric-value">{{if .Summary.HasData}}{{.Summary.MaxValueText}}{{else}}--{{end}}</div>
+        {{if not .Summary.HasData}}<p class="metric-note">暂无记录</p>{{end}}
+    </article>
+    <article class="metric-card tech-frame">
+        <span class="metric-label">{{.CurrentPeriodLabel}}最小值</span>
+        <div class="metric-value">{{if .Summary.HasData}}{{.Summary.MinValueText}}{{else}}--{{end}}</div>
+        {{if not .Summary.HasData}}<p class="metric-note">暂无记录</p>{{end}}
+    </article>
+    <article class="metric-card tech-frame">
+        <span class="metric-label">{{.CurrentPeriodLabel}}平均值</span>
+        <div class="metric-value">{{if .Summary.HasData}}{{.Summary.AverageValueText}}{{else}}--{{end}}</div>
+        {{if not .Summary.HasData}}<p class="metric-note">暂无记录</p>{{end}}
+    </article>
+</section>
+
+<section class="panel tech-frame history-chart-panel">
+    <div class="module-head">
+        <div class="module-copy">
+            <h2>{{.CurrentPeriodLabel}}趋势</h2>
+            <p class="panel-subtitle">{{defaultText .CurrentPointName}}{{if .CurrentPointUnit}} / {{.CurrentPointUnit}}{{end}}{{if .Chart.HasData}} / {{defaultText .Chart.StartDate}} 至 {{defaultText .Chart.EndDate}}{{else}} / {{.CurrentPeriodLabel}}{{end}}</p>
+        </div>
+    </div>
+
+    {{if .Chart.HasData}}
+    <div class="history-chart-shell">
+        <div class="history-chart-labels">
+            {{if .Chart.YTicks}}
+            {{range .Chart.YTicks}}<span style="top: {{.Y}}%;">{{.Label}}</span>{{end}}
+            {{else}}
+            <span style="top: 10%;">{{defaultText .Chart.MaxLabel}}</span>
+            <span style="top: 82%;">{{defaultText .Chart.MinLabel}}</span>
+            {{end}}
+        </div>
+        <div class="history-chart-plot">
+            <svg class="history-chart" viewBox="0 0 100 100" role="img" aria-label="设备历史趋势图" preserveAspectRatio="none">
+                {{if .Chart.YTicks}}
+                {{range .Chart.YTicks}}<line class="history-chart-grid" x1="8" y1="{{.Y}}" x2="94" y2="{{.Y}}"></line>{{end}}
+                {{else}}
+                <line class="history-chart-grid" x1="8" y1="10" x2="94" y2="10"></line>
+                <line class="history-chart-grid" x1="8" y1="46" x2="94" y2="46"></line>
+                <line class="history-chart-grid" x1="8" y1="82" x2="94" y2="82"></line>
+                {{end}}
+                <line class="history-chart-axis" x1="8" y1="82" x2="94" y2="82"></line>
+                <line class="history-chart-axis" x1="8" y1="10" x2="8" y2="82"></line>
+                {{range .AlarmThresholds}}
+                {{if not .OutOfView}}
+                <line class="history-threshold-line history-threshold-{{.Kind}}" x1="8" y1="{{.Y}}" x2="94" y2="{{.Y}}"></line>
+                {{end}}
+                {{end}}
+                {{if .Chart.HasLine}}
+                {{if .Chart.Segments}}
+                {{range .Chart.Segments}}<polyline class="history-chart-line" points="{{.}}"></polyline>{{end}}
+                {{else}}
+                <polyline class="history-chart-line" points="{{.Chart.PolylinePoints}}"></polyline>
+                {{end}}
+                {{end}}
+            </svg>
+            {{range .Chart.Points}}
+            <span class="history-chart-point" style="left: {{.X}}%; top: {{.Y}}%;" title="{{.Date}} / {{.ValueText}}"></span>
+            {{end}}
+            {{range .Chart.Labels}}
+            <span class="history-value-label {{.ClassName}}" style="left: {{.X}}%; top: {{.Y}}%;">{{.ValueText}}</span>
+            {{end}}
+            {{range .AlarmThresholds}}
+            {{if .OutOfView}}
+            <span class="history-threshold-outside history-threshold-outside-{{.Kind}}">{{.Label}}</span>
+            {{else}}
+            <span class="history-threshold-label history-threshold-{{.Kind}} {{.LabelClass}}" style="top: {{.Y}}%;">{{.Label}}</span>
+            {{end}}
+            {{end}}
+        </div>
+        <div class="history-chart-dates">
+            <span>{{defaultText .Chart.StartDate}}</span>
+            <span>{{defaultText .Chart.EndDate}}</span>
+        </div>
+    </div>
+    {{if .Chart.Message}}
+    <div class="empty-block history-chart-message">{{.Chart.Message}}</div>
+    {{end}}
+    {{else}}
+    <div class="empty-block history-empty-state">
+        <strong>暂无有效趋势数据</strong>
+        <span class="empty-secondary">{{.Chart.Message}}</span>
+    </div>
+    {{end}}
+</section>
+
+<section class="panel tech-frame history-records-panel">
+    <div class="module-head">
+        <div class="module-copy">
+            <h2>历史明细</h2>
+            <p class="panel-subtitle">按时间倒序展示当前数据项。</p>
+        </div>
+        <div class="module-tools toolbar-strip">
+            <span class="toolbar-chip">记录数：{{len .HistoryRecords}}</span>
+        </div>
+    </div>
+
+    <div class="table-shell">
+        <table class="data-table monitor-table history-table">
+            <thead>
+                <tr>
+                    <th>时间</th>
+                    <th>数据项</th>
+                    <th>历史值</th>
+                    <th>数据质量</th>
+                    <th>聚合样本</th>
+                    <th>实际采集时间</th>
+                    <th>所属主站</th>
+                    <th>所属通道</th>
+                </tr>
+            </thead>
+            <tbody>
+            {{range .HistoryRecords}}
+                <tr>
+                    <td>{{defaultText .TimeText}}</td>
+                    <td>{{defaultText .PointName}}</td>
+                    <td><span class="reading reading-live">{{.ValueText}}</span></td>
+                    <td>{{defaultText .Quality}}</td>
+                    <td>{{defaultText .SampleInfo}}</td>
+                    <td>{{formatTimestamp .TimestampMS}}</td>
+                    <td>{{defaultText $.MasterName}}</td>
+                    <td>{{defaultText $.ChannelName}}</td>
+                </tr>
+            {{else}}
+                <tr><td colspan="8" class="empty-cell">暂无历史数据</td></tr>
+            {{end}}
+            </tbody>
+        </table>
+    </div>
+</section>
+{{end}}
+{{end}}

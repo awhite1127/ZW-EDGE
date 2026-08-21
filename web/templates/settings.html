@@ -1,0 +1,353 @@
+{{define "content"}}
+{{/* 系统设置中心：区分持久化配置与当前运行态，并集中承载高风险应用操作。 */}}
+<section class="settings-center-page page-fill" {{if or .CanManageSystemSettings .CanManageNetwork .CanManageMqtt}}data-settings-runtime-page data-settings-runtime-url="/api/settings/runtime-status"{{end}}>
+    <section class="settings-center-grid function-entry-grid">
+        {{if or .CanManageModbusServer .CanManageModbusMappings}}
+        <article class="panel tech-frame settings-card settings-center-card">
+            <div class="settings-card-head">
+                <div class="module-copy">
+                    <h2><svg class="ui-icon section-title-icon" aria-hidden="true"><use href="#icon-server"></use></svg>Modbus 北向服务</h2>
+                </div>
+                <span class="status-neutral">独立配置</span>
+            </div>
+            <div class="settings-center-status"><span>FC03 保持寄存器</span><strong>设置即时应用，不影响南向采集</strong></div>
+            <div class="settings-center-actions"><a class="btn btn-secondary" href="/settings/modbus-server">进入 Modbus 北向服务</a></div>
+        </article>
+        {{end}}
+        {{if .CanManageDeviceTemplates}}
+        <article class="panel tech-frame settings-card settings-center-card">
+            <div class="settings-card-head">
+                <div class="module-copy">
+                    <h2><svg class="ui-icon section-title-icon" aria-hidden="true"><use href="#icon-device"></use></svg>设备类型管理</h2>
+                </div>
+                {{if .DeviceTemplateState.Available}}<span class="status-ok">模板可用</span>{{else}}<span class="status-bad">不可用</span>{{end}}
+            </div>
+            {{if .DeviceTemplateState.ErrorMessage}}
+            <span hidden data-initial-toast data-toast-type="error" data-toast-message="设备类型暂时无法获取：{{.DeviceTemplateState.ErrorMessage}}"></span>
+            {{end}}
+            <div class="settings-center-metrics">
+                <span>设备类型总数 <strong>{{.DeviceTemplateManagement.TotalTemplates}}</strong></span>
+                <span>已被引用 <strong>{{.DeviceTemplateManagement.ReferencedTemplates}}</strong></span>
+                <span>未被引用 <strong>{{.DeviceTemplateManagement.UnreferencedTemplates}}</strong></span>
+            </div>
+            <div class="settings-center-actions"><a class="btn btn-secondary" href="/settings/device-types">进入设备类型管理</a></div>
+        </article>
+        {{end}}
+
+        <article class="panel tech-frame settings-card settings-center-card">
+            <div class="settings-card-head">
+                <div class="module-copy">
+                    <h2><svg class="ui-icon section-title-icon" aria-hidden="true"><use href="#icon-identity"></use></svg>设备标识</h2>
+                </div>
+                {{if .SettingsState.Available}}<span class="status-ok">可编辑</span>{{else}}<span class="status-bad">不可用</span>{{end}}
+            </div>
+            {{if .SettingsState.ErrorMessage}}<span hidden data-initial-toast data-toast-type="error" data-toast-message="{{.SettingsState.ErrorMessage}}"></span>{{end}}
+            <div class="settings-center-status"><span>当前标识</span><strong>{{if .SettingsState.Available}}{{if .Settings.DisplayName}}{{.Settings.DisplayName}}{{else if .Settings.DeviceName}}{{.Settings.DeviceName}}{{else}}未设置设备名称{{end}}{{else}}基础设置不可用{{end}}</strong></div>
+            {{if .CanManageSystemSettings}}<div class="settings-center-actions"><button type="button" class="btn btn-secondary" data-channel-modal-open="basic-settings-modal" aria-haspopup="dialog" aria-controls="basic-settings-modal" {{if not .SettingsState.Available}}disabled{{end}}>编辑设备标识</button></div>{{end}}
+        </article>
+
+        <article class="panel tech-frame settings-card settings-center-card">
+            <div class="settings-card-head">
+                <div class="module-copy">
+                    <h2><svg class="ui-icon section-title-icon" aria-hidden="true"><use href="#icon-network"></use></svg>网络配置</h2>
+                </div>
+                {{if .NetworkRuntimeState.Available}}<span data-settings-network-state class="{{if eq .NetworkRuntime.LinkState "connected"}}status-ok{{else if eq .NetworkRuntime.LinkState "disconnected"}}status-warn{{else if eq .NetworkRuntime.LinkState "not_found"}}status-bad{{else}}status-neutral{{end}}">{{.NetworkRuntime.LinkStateText}}</span>{{else}}<span data-settings-network-state class="status-bad">状态不可用</span>{{end}}
+            </div>
+            {{if .NetworkState.ErrorMessage}}<span hidden data-initial-toast data-toast-type="error" data-toast-message="网络配置暂时无法获取：{{.NetworkState.ErrorMessage}}"></span>{{end}}
+            {{if .NetworkRuntimeState.ErrorMessage}}<span hidden data-initial-toast data-toast-type="error" data-toast-message="网口运行状态暂时无法获取：{{.NetworkRuntimeState.ErrorMessage}}"></span>{{end}}
+            <div class="settings-center-status"><span>{{if eq .Network.Mode "dhcp"}}DHCP 自动获取{{else}}静态 IP{{end}}</span><strong data-settings-network-summary>{{if not .NetworkRuntimeState.Available}}网口运行状态暂时无法获取{{else if .NetworkRuntime.IPAddress}}当前 IP：{{.NetworkRuntime.IPAddress}}{{else if .NetworkRuntime.Message}}{{.NetworkRuntime.Message}}{{else if .NetworkRuntime.LinkStateText}}{{.NetworkRuntime.LinkStateText}}{{else}}暂未获取到实际 IP{{end}}</strong></div>
+            {{if .CanManageNetwork}}<div class="settings-center-actions"><button type="button" class="btn btn-secondary" data-channel-modal-open="network-settings-modal" aria-haspopup="dialog" aria-controls="network-settings-modal" {{if not .NetworkState.Available}}disabled{{end}}>编辑网络配置</button></div>{{end}}
+        </article>
+
+        <article class="panel tech-frame settings-card settings-center-card">
+            <div class="settings-card-head">
+                <div class="module-copy">
+                    <h2><svg class="ui-icon section-title-icon" aria-hidden="true"><use href="#icon-clock"></use></svg>日期与时间</h2>
+                </div>
+                {{if .TimeRuntimeState.Available}}<span data-settings-time-state class="{{if .TimeRuntime.SettingsPendingApply}}status-warn{{else if eq .TimeRuntime.SyncState "synchronized"}}status-ok{{else if or (eq .TimeRuntime.SyncState "error") (eq .TimeRuntime.SyncState "takeover_failed")}}status-bad{{else if or (eq .TimeRuntime.SyncState "unsynchronized") (eq .TimeRuntime.SyncState "external")}}status-warn{{else}}status-neutral{{end}}">{{if .TimeRuntime.SettingsPendingApply}}设置待应用{{else}}{{.TimeRuntime.SyncStateText}}{{end}}</span>{{else}}<span data-settings-time-state class="status-bad">状态不可用</span>{{end}}
+            </div>
+            {{if .TimeSettingsState.ErrorMessage}}<span hidden data-initial-toast data-toast-type="error" data-toast-message="日期与时间配置暂时无法获取：{{.TimeSettingsState.ErrorMessage}}"></span>{{end}}
+            {{if .TimeRuntimeState.ErrorMessage}}<span hidden data-initial-toast data-toast-type="error" data-toast-message="日期与时间状态暂时无法获取：{{.TimeRuntimeState.ErrorMessage}}"></span>{{end}}
+            <div class="settings-center-status"><span>NTP：<b data-settings-time-process-summary>{{if .TimeRuntime.NTPProcessStateText}}{{.TimeRuntime.NTPProcessStateText}}{{else}}NTP 未运行{{end}}</b></span><strong data-settings-time-summary>{{if .TimeRuntimeState.Available}}{{.TimeRuntime.CurrentTimeText}}{{else}}板端时间状态暂时无法获取{{end}}</strong></div>
+            {{if .CanManageSystemSettings}}<div class="settings-center-actions"><button type="button" class="btn btn-secondary" data-channel-modal-open="time-settings-modal" aria-haspopup="dialog" aria-controls="time-settings-modal" {{if not .TimeSettingsState.Available}}disabled{{end}}>日期与时间</button></div>{{end}}
+        </article>
+
+        <article class="panel tech-frame settings-card settings-center-card">
+            <div class="settings-card-head">
+                <div class="module-copy">
+                    <h2><svg class="ui-icon section-title-icon" aria-hidden="true"><use href="#icon-mqtt"></use></svg>MQTT 北向配置</h2>
+                </div>
+                {{if .MqttRuntimeState.Available}}<span data-settings-mqtt-state class="{{mqttStateClass .MqttRuntime.State}}">{{mqttStateText .MqttRuntime.State}}</span>{{else}}<span data-settings-mqtt-state class="status-bad">状态不可用</span>{{end}}
+            </div>
+            {{if .MqttState.ErrorMessage}}<span hidden data-initial-toast data-toast-type="error" data-toast-message="MQTT 配置暂时无法获取：{{.MqttState.ErrorMessage}}"></span>{{end}}
+            {{if .MqttRuntimeState.ErrorMessage}}<span hidden data-initial-toast data-toast-type="error" data-toast-message="MQTT 运行状态暂时无法获取：{{.MqttRuntimeState.ErrorMessage}}"></span>{{end}}
+            <div class="settings-center-status"><span>{{if .Mqtt.Enabled}}已启用{{else}}未启用{{end}}</span><strong data-settings-mqtt-summary>{{if .MqttRuntimeState.ErrorMessage}}MQTT 状态暂时无法获取{{else if .MqttRuntime.LastErrorMessage}}{{.MqttRuntime.LastErrorMessage}}{{else if .Mqtt.Enabled}}已启用 MQTT 北向发布{{else}}未启用 MQTT 北向发布{{end}}</strong></div>
+            {{if .CanManageMqtt}}<div class="settings-center-actions"><a class="btn btn-secondary" href="/settings/mqtt">编辑 MQTT 配置</a></div>{{end}}
+        </article>
+    </section>
+
+        {{if .CanManageNetwork}}
+        <div class="channel-modal" id="network-settings-modal" aria-hidden="true">
+            <div class="channel-modal-backdrop" data-channel-modal-close></div>
+            <div class="channel-modal-dialog tech-frame settings-network-modal" role="dialog" aria-modal="true" aria-labelledby="network-settings-modal-title">
+                <header class="channel-modal-header">
+                    <div>
+                        <h3 id="network-settings-modal-title">编辑网络配置</h3>
+                        <p>选择静态 IP 或 DHCP，保存后立即生效。</p>
+                    </div>
+                    <button type="button" class="btn btn-secondary btn-inline modal-close-btn" data-channel-modal-close>关闭</button>
+                </header>
+                <div class="channel-modal-body">
+                    {{if .NetworkState.ErrorMessage}}
+                    <span hidden data-initial-toast data-toast-type="error" data-toast-message="网络配置暂时无法获取：{{.NetworkState.ErrorMessage}}"></span>
+                    <p class="field-hint status-bad">网络配置暂不可用。</p>
+                    {{end}}
+                    {{if .NetworkRuntimeState.ErrorMessage}}
+                    <span hidden data-initial-toast data-toast-type="error" data-toast-message="网口运行状态暂时无法获取：{{.NetworkRuntimeState.ErrorMessage}}"></span>
+                    <p class="field-hint status-bad">网口运行状态暂不可用。</p>
+                    {{end}}
+                    <div class="network-status-grid">
+                        <div class="network-status-item">
+                            <span>已保存模式</span>
+                            <strong>{{if eq .Network.Mode "dhcp"}}DHCP 自动获取{{else}}静态 IP{{end}}</strong>
+                        </div>
+                        <div class="network-status-item">
+                            <span>当前实际 IP</span>
+                            <strong data-network-runtime-ip>{{defaultText .NetworkRuntime.IPAddress}}</strong>
+                        </div>
+                        <div class="network-status-item">
+                            <span>当前实际网关</span>
+                            <strong data-network-runtime-gateway>{{defaultText .NetworkRuntime.DefaultGateway}}</strong>
+                        </div>
+                    </div>
+                    <form class="settings-form" method="post" action="/settings/network/save-apply" data-network-save-apply-form>
+                        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                        <input type="hidden" name="redirect" value="{{.SettingsReturnPath}}">
+                        <div class="channel-form-grid settings-compact-grid">
+                            <label class="form-field">
+                                <span class="field-label">IPv4 配置模式</span>
+                                <select name="mode" data-network-mode {{if not .NetworkState.Available}}disabled{{end}}>
+                                    <option value="static" {{if ne .Network.Mode "dhcp"}}selected{{end}}>静态 IP</option>
+                                    <option value="dhcp" {{if eq .Network.Mode "dhcp"}}selected{{end}}>DHCP 自动获取</option>
+                                </select>
+                            </label>
+                            <label class="form-field">
+                                <span class="field-label">网口名称</span>
+                                <input
+                                    name="interface_name"
+                                    type="text"
+                                    maxlength="15"
+                                    required
+                                    value="{{.Network.InterfaceName}}"
+                                    placeholder="eth0"
+                                    {{if not .NetworkState.Available}}disabled{{end}}>
+                            </label>
+                            <label class="form-field" data-network-static-field>
+                                <span class="field-label">静态 IP 地址</span>
+                                <input
+                                    name="ip_address"
+                                    data-keyboard="ip"
+                                    type="text"
+                                    {{if ne .Network.Mode "dhcp"}}required{{end}}
+                                    value="{{.Network.IPAddress}}"
+                                    placeholder="192.168.0.172"
+                                    {{if not .NetworkState.Available}}disabled{{end}}>
+                            </label>
+                            <label class="form-field" data-network-static-field>
+                                <span class="field-label">子网掩码</span>
+                                <input
+                                    name="netmask"
+                                    data-keyboard="ip"
+                                    type="text"
+                                    {{if ne .Network.Mode "dhcp"}}required{{end}}
+                                    value="{{.Network.Netmask}}"
+                                    placeholder="255.255.254.0"
+                                    {{if not .NetworkState.Available}}disabled{{end}}>
+                            </label>
+                            <label class="form-field" data-network-static-field>
+                                <span class="field-label">默认网关</span>
+                                <input
+                                    name="gateway"
+                                    data-keyboard="ip"
+                                    type="text"
+                                    {{if ne .Network.Mode "dhcp"}}required{{end}}
+                                    value="{{.Network.Gateway}}"
+                                    placeholder="192.168.1.1"
+                                    {{if not .NetworkState.Available}}disabled{{end}}>
+                            </label>
+                            <label class="form-field form-field-wide" data-network-static-field>
+                                <span class="field-label">DNS 服务器（选填）</span>
+                                <input
+                                    name="dns_servers"
+                                    data-keyboard="text"
+                                    type="text"
+                                    value="{{.NetworkDNSInput}}"
+                                    placeholder="223.5.5.5,8.8.8.8"
+                                    {{if not .NetworkState.Available}}disabled{{end}}>
+                            </label>
+                        </div>
+
+                        <p class="field-hint settings-inline-hint" data-network-static-hint>DNS 可留空；切换地址可能中断当前连接。</p>
+                        <p class="field-hint settings-inline-hint hidden" data-network-dhcp-hint>DHCP 模式会清理静态地址和路由，并确保该网口仅运行一个 DHCP 客户端。当前实际地址以运行状态为准。</p>
+                        <p class="channel-save-feedback hidden" data-network-save-apply-feedback></p>
+
+                        <div class="channel-form-actions settings-form-actions">
+                            <button type="button" class="btn btn-secondary" data-channel-modal-close>取消</button>
+                            <button class="btn btn-primary" type="submit" data-network-save-apply-submit {{if not .NetworkState.Available}}disabled{{end}}>保存网络设置并应用</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {{end}}
+
+            {{if .CanManageSystemSettings}}
+            <div class="channel-modal" id="time-settings-modal" aria-hidden="true">
+                <div class="channel-modal-backdrop" data-channel-modal-close></div>
+                <div class="channel-modal-dialog tech-frame settings-form-modal settings-time-modal" role="dialog" aria-modal="true" aria-labelledby="time-settings-modal-title">
+                    <header class="channel-modal-header">
+                        <div>
+                            <h3 id="time-settings-modal-title">日期与时间</h3>
+                            <p>选择网络校时或手动设置。</p>
+                        </div>
+                        <button type="button" class="btn btn-secondary btn-inline modal-close-btn" data-channel-modal-close>关闭</button>
+                    </header>
+                    <div class="channel-modal-body">
+            <div class="settings-time-block settings-time-modal-content" aria-labelledby="settings-time-status-title">
+                <div class="settings-time-head">
+                    <div>
+                        <div class="settings-action-title-row">
+                            <h3 id="settings-time-status-title">当前状态</h3>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-time-status-grid">
+                    <div class="settings-time-status-item"><span>当前设备时间</span><strong data-time-runtime-current>{{.TimeRuntime.CurrentTimeText}}</strong></div>
+                    <div class="settings-time-status-item"><span>当前时区</span><strong data-time-runtime-zone>{{if eq .TimeRuntime.Timezone "Asia/Shanghai"}}北京时间（Asia/Shanghai）{{else if eq .TimeRuntime.Timezone "Etc/UTC"}}UTC（Etc/UTC）{{else}}{{.TimeRuntime.Timezone}}{{end}} {{.TimeRuntime.UTCOffsetText}}</strong></div>
+                    <div class="settings-time-status-item settings-time-status-wide"><span>NTP 状态</span><strong data-time-runtime-process>{{if .TimeRuntime.NTPProcessStateText}}{{.TimeRuntime.NTPProcessStateText}}{{else if .TimeRuntime.NTPProcessRunning}}NTP 正在运行{{else}}NTP 未运行{{end}}</strong></div>
+                    <div class="settings-time-status-item"><span>RTC 状态</span><strong data-time-runtime-rtc>{{if .TimeRuntime.RTCAvailable}}{{.TimeRuntime.RTCTimeText}}{{else}}RTC 不可用{{end}}</strong></div>
+                    <div class="settings-time-status-item"><span>最近主动同步</span><strong data-time-runtime-last-sync>{{if .TimeRuntime.LastSyncTimeMS}}{{formatTimestamp .TimeRuntime.LastSyncTimeMS}}{{else}}暂无{{end}}</strong></div>
+                </div>
+
+                <p class="settings-time-notice {{if or (eq .TimeRuntime.NTPProcessState "managed") (eq .TimeRuntime.NTPProcessState "stopped")}}hidden{{end}} {{if eq .TimeRuntime.NTPProcessState "takeover_failed"}}status-bad{{else}}status-warn{{end}}" data-time-process-notice>{{.TimeRuntime.NTPProcessStateText}}</p>
+                <p class="settings-time-notice status-warn {{if not .TimeRuntime.SettingsPendingApply}}hidden{{end}}" data-time-pending-warning>时间设置尚未应用，当前时区和 NTP 运行方式保持不变。请先保存并应用。</p>
+                <p class="settings-time-notice status-bad {{if not .TimeRuntime.LastErrorMessage}}hidden{{end}}" data-time-runtime-error>{{.TimeRuntime.LastErrorMessage}}</p>
+
+                {{if .CanManageSystemSettings}}
+                <form class="settings-form settings-time-form" method="post" action="/settings/time/save-apply" data-time-settings-form>
+                    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                    <label class="field settings-timezone-field"><span>时区设置</span><select name="timezone" data-timezone-select required><option value="Asia/Shanghai" {{if eq .TimeSettings.Timezone "Asia/Shanghai"}}selected{{end}}>北京时间（Asia/Shanghai）</option><option value="Etc/UTC" {{if eq .TimeSettings.Timezone "Etc/UTC"}}selected{{end}}>UTC（Etc/UTC）</option>{{if and (ne .TimeSettings.Timezone "Asia/Shanghai") (ne .TimeSettings.Timezone "Etc/UTC")}}<option value="{{.TimeSettings.Timezone}}" selected>{{.TimeSettings.Timezone}}</option>{{end}}</select><small class="setting-help-text">默认使用北京时间；导入的其他有效 IANA 时区仍会保留。</small></label>
+
+                    <fieldset class="settings-time-mode-fieldset">
+                        <legend>时间同步方式</legend>
+                        <div class="settings-time-mode-selector" data-time-mode-control data-settings-pending="{{.TimeRuntime.SettingsPendingApply}}" data-settings-available="{{.TimeSettingsState.Available}}" data-runtime-available="{{.TimeRuntimeState.Available}}">
+                            <label><input type="radio" name="ntp_enabled" value="true" data-time-mode="ntp" {{if .TimeSettings.NTPEnabled}}checked{{end}}><span>自动从网络校准时间（NTP）</span></label>
+                            <label><input type="radio" name="ntp_enabled" value="false" data-time-mode="manual" {{if not .TimeSettings.NTPEnabled}}checked{{end}}><span>手动设置时间</span></label>
+                        </div>
+                    </fieldset>
+
+                    <div class="settings-time-ntp-fields {{if not .TimeSettings.NTPEnabled}}hidden{{end}}" data-time-ntp-fields>
+                        <label class="field"><span>主 NTP 服务器</span><input type="text" name="ntp_primary" value="{{.TimeSettings.NTPPrimary}}" maxlength="253"></label>
+                        <label class="field"><span>备用 NTP 服务器</span><input type="text" name="ntp_secondary" value="{{.TimeSettings.NTPSecondary}}" maxlength="253"></label>
+                    </div>
+                    <div class="channel-form-actions settings-form-actions settings-time-save-actions">
+                        <span class="field-hint">修改时区或同步方式后，请保存并应用。</span>
+                        <button type="submit" class="btn btn-primary" {{if not .TimeSettingsState.Available}}disabled{{end}}>保存并应用</button>
+                    </div>
+                </form>
+
+                <p class="settings-time-action-hint setting-help-text {{if not .TimeRuntime.SettingsPendingApply}}hidden{{end}}" data-time-action-hint>请先保存并应用当前设置，再执行校时操作。</p>
+                <div class="settings-time-operation {{if not .TimeSettings.NTPEnabled}}hidden{{end}}" data-time-ntp-section>
+                        <p class="setting-help-text">使用当前 NTP 服务器立即校准设备时间。</p>
+                    <form method="post" action="/settings/time/sync-now" data-time-sync-form>
+                        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                        <button type="submit" class="btn btn-secondary" data-time-sync-button {{if .TimeRuntime.SettingsPendingApply}}disabled{{end}}>立即同步</button>
+                    </form>
+                </div>
+                <section class="settings-time-operation {{if .TimeSettings.NTPEnabled}}hidden{{end}}" data-time-manual-section>
+                        <p class="setting-help-text">选择手动设置时间后，可同步浏览器时间或输入指定时间。</p>
+                    <form method="post" action="/settings/time/manual" class="settings-form settings-time-manual-form" data-manual-time-form data-timezone="{{.TimeSettings.Timezone}}">
+                        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><input type="hidden" name="epoch_ms" data-manual-epoch><input type="hidden" name="source" value="manual" data-manual-time-source>
+                        <label class="field"><span>手动设置设备时间</span><input type="datetime-local" data-keyboard="none" data-manual-datetime step="1"></label>
+                        <div class="channel-form-actions settings-form-actions"><button type="button" class="btn btn-secondary" data-browser-time-sync {{if .TimeRuntime.SettingsPendingApply}}disabled{{end}}>同步浏览器时间</button><button type="submit" class="btn btn-primary" data-manual-time-submit {{if .TimeRuntime.SettingsPendingApply}}disabled{{end}}>设置输入时间</button></div>
+                    </form>
+                </section>
+                {{end}}
+            </div>
+                    </div>
+                </div>
+            </div>
+            {{end}}
+
+        {{if .CanManageSystemSettings}}
+        <div class="channel-modal" id="basic-settings-modal" aria-hidden="true">
+            <div class="channel-modal-backdrop" data-channel-modal-close></div>
+            <div class="channel-modal-dialog tech-frame settings-form-modal" role="dialog" aria-modal="true" aria-labelledby="basic-settings-modal-title">
+                <header class="channel-modal-header">
+                    <div>
+                        <h3 id="basic-settings-modal-title">编辑基础设置</h3>
+                        <p>维护控制器名称与现场标识。</p>
+                    </div>
+                    <button type="button" class="btn btn-secondary btn-inline modal-close-btn" data-channel-modal-close>关闭</button>
+                </header>
+                <div class="channel-modal-body">
+
+            {{if .SettingsState.ErrorMessage}}
+            <span hidden data-initial-toast data-toast-type="error" data-toast-message="{{.SettingsState.ErrorMessage}}"></span>
+            <p class="field-hint status-bad">基础设置暂不可用。</p>
+            {{end}}
+
+            <form class="settings-form" method="post" action="/settings">
+                <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                <input type="hidden" name="redirect" value="{{.SettingsReturnPath}}">
+                <div class="channel-form-grid settings-compact-grid">
+                    <label class="form-field">
+                        <span class="field-label">设备名称</span>
+                        <input
+                            name="device_name"
+                            type="text"
+                            data-keyboard="text-cn"
+                            maxlength="64"
+                            value="{{.Settings.DeviceName}}"
+                            placeholder="边缘计算控制器"
+                            {{if not .SettingsState.Available}}disabled{{end}}>
+                    </label>
+                    <label class="form-field">
+                        <span class="field-label">系统显示名称</span>
+                        <input
+                            name="display_name"
+                            type="text"
+                            data-keyboard="text-cn"
+                            maxlength="64"
+                            value="{{.Settings.DisplayName}}"
+                            placeholder="珠海知更通讯管理系统"
+                            {{if not .SettingsState.Available}}disabled{{end}}>
+                    </label>
+                    <label class="form-field form-field-wide">
+                        <span class="field-label">安装位置</span>
+                        <input
+                            name="site_location"
+                            type="text"
+                            data-keyboard="text-cn"
+                            maxlength="128"
+                            value="{{.Settings.SiteLocation}}"
+                            placeholder="未设置"
+                            {{if not .SettingsState.Available}}disabled{{end}}>
+                    </label>
+                </div>
+
+                <div class="channel-form-actions settings-form-actions">
+                    <span class="field-hint">保存后写入系统配置，不会影响采集轮询。</span>
+                    <button type="button" class="btn btn-secondary" data-channel-modal-close>取消</button>
+                    <button class="btn btn-primary" type="submit" {{if not .SettingsState.Available}}disabled{{end}}>保存基础设置</button>
+                </div>
+            </form>
+                </div>
+            </div>
+        </div>
+
+        {{end}}
+
+</section>
+{{end}}

@@ -1,0 +1,31 @@
+{{define "content"}}
+{{/* 采集管理主页面：组合通道、主站、设备三个局部面板及相关编辑弹窗。 */}}
+<section class="collect-manage-overview panel tech-frame">
+    <div class="collect-manage-cards" role="tablist" aria-label="采集对象统计">
+        <button type="button" id="collection-tab-channels" class="collect-manage-card is-active" data-collection-tab="channels" role="tab" aria-controls="channels" aria-selected="true" tabindex="0">
+            <span><svg class="ui-icon section-title-icon" aria-hidden="true"><use href="#icon-channel"></use></svg>通道</span>
+            <strong>{{.ChannelCount}}</strong>
+        </button>
+        <button type="button" id="collection-tab-masters" class="collect-manage-card" data-collection-tab="masters" role="tab" aria-controls="masters" aria-selected="false" tabindex="-1">
+            <span><svg class="ui-icon section-title-icon" aria-hidden="true"><use href="#icon-master"></use></svg>主站</span>
+            <strong>{{.MasterCount}}</strong>
+        </button>
+        <button type="button" id="collection-tab-devices" class="collect-manage-card" data-collection-tab="devices" role="tab" aria-controls="devices" aria-selected="false" tabindex="-1">
+            <span><svg class="ui-icon section-title-icon" aria-hidden="true"><use href="#icon-device"></use></svg>设备</span>
+            <strong>{{.DeviceCount}}</strong>
+        </button>
+    </div>
+</section>
+
+<section id="channels" class="collect-manage-panel page-fill is-active" data-collection-panel="channels" role="tabpanel" aria-labelledby="collection-tab-channels">
+    {{template "channels_panel" .Channels}}
+</section>
+
+<section id="masters" class="collect-manage-panel page-fill" data-collection-panel="masters" role="tabpanel" aria-labelledby="collection-tab-masters" hidden>
+    {{template "masters_panel" .Masters}}
+</section>
+
+<section id="devices" class="collect-manage-panel page-fill" data-collection-panel="devices" role="tabpanel" aria-labelledby="collection-tab-devices" hidden>
+    {{template "devices_panel" .Devices}}
+</section>
+{{end}}

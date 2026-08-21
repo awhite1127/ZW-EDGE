@@ -1,0 +1,117 @@
+{{define "content"}}
+{{/* 历史总览页：按设备展示周期摘要，并提供受权限控制的数据维护入口。 */}}
+<section class="panel tech-frame history-overview-panel page-viewport-root">
+    <div class="module-head history-overview-panel-head">
+        <div class="module-copy">
+            <h2>设备历史概况</h2>
+        </div>
+        <div class="module-tools toolbar-strip">
+            <span class="toolbar-chip">{{.TableStatusText}}</span>
+            {{if .ExportURL}}<a class="btn btn-small btn-secondary" href="{{.ExportURL}}">导出 CSV</a>{{end}}
+            <a class="btn btn-small" href="{{.RefreshURL}}">刷新</a>
+        </div>
+    </div>
+
+    {{if .InvalidFilterMessage}}
+    <div class="flash flash-info">{{.InvalidFilterMessage}}</div>
+    {{end}}
+
+    {{if .HasHistoryFilter}}<div class="history-filter-status">
+        <span>当前筛选：<strong>{{.CurrentFilterText}}</strong></span>
+        <a class="btn btn-small btn-secondary" href="/history">清除筛选</a>
+    </div>{{end}}
+
+    <div class="history-overview-layout">
+        <aside class="history-filter-tree" aria-label="历史数据设备筛选">
+            <div class="history-filter-tree-head">
+                <h3>设备筛选</h3>
+            </div>
+            <a class="tree-node tree-root tree-filter-node {{if .FilterTree.AllActive}}active{{end}}" href="{{.FilterTree.AllURL}}">
+                <span class="tree-node-icon" aria-hidden="true"><svg class="ui-icon"><use href="#icon-history"></use></svg></span>
+                <strong>全部设备</strong>
+            </a>
+            {{range .FilterTree.Channels}}
+            <div class="tree-branch {{if not .Expanded}}is-collapsed{{end}}" data-history-tree-branch data-tree-key="channel:{{.ID}}">
+            <div class="tree-branch-row">
+                <button type="button" class="tree-toggle" data-history-tree-toggle aria-label="展开或收起通道" aria-expanded="{{if .Expanded}}true{{else}}false{{end}}"><span class="tree-toggle-chevron" aria-hidden="true"></span></button>
+                <a class="tree-node tree-filter-node {{if .Active}}active{{end}} {{if .HasIssue}}tree-node-issue{{end}}" href="{{.URL}}">
+                    <span class="tree-node-icon" aria-hidden="true"><svg class="ui-icon"><use href="#icon-channel"></use></svg></span>
+                    <strong>{{.Label}}</strong>
+                    <b>{{.DeviceCount}} 设备{{if .IssueCount}} / 异常 {{.IssueCount}}{{end}}</b>
+                </a>
+            </div>
+            <div class="tree-branch-children">
+                {{range .Children}}
+                <div class="tree-branch-row tree-depth-1">
+                    <a class="tree-node tree-filter-node {{if .Active}}active{{end}} {{if .HasIssue}}tree-node-issue{{end}}" href="{{.URL}}" data-history-master-id="{{.ID}}">
+                        <span class="tree-node-icon" aria-hidden="true"><svg class="ui-icon"><use href="#icon-master"></use></svg></span>
+                        <strong>{{.Label}}</strong>
+                        <b>{{.DeviceCount}} 设备{{if .IssueCount}} / 异常 {{.IssueCount}}{{end}}</b>
+                    </a>
+                </div>
+                {{end}}
+            </div>
+            </div>
+            {{else}}
+            <div class="tree-empty empty-block">
+                <strong>暂无采集配置</strong>
+                <span class="empty-secondary">尚未配置通道、主站和设备。</span>
+            </div>
+            {{end}}
+        </aside>
+
+        <div class="history-overview-list">
+    {{if .ShowDeviceSelector}}
+    <label class="current-device-selector history-current-device-selector" for="history-device-selector">
+        <span>当前设备</span>
+        <select id="history-device-selector" data-history-device-selector aria-label="选择当前设备">
+            {{range .DeviceOptions}}
+            <option value="{{.URL}}" {{if .Selected}}selected{{end}}>{{.Label}}</option>
+            {{end}}
+        </select>
+    </label>
+    {{end}}
+    {{if .Rows}}
+    <div class="table-shell table-shell-wide history-overview-shell">
+        <table class="data-table monitor-table history-overview-table">
+            <colgroup>
+                <col class="history-device-column">
+                <col class="history-point-column">
+                <col class="history-value-column">
+                <col class="history-time-column">
+                <col class="history-action-column">
+            </colgroup>
+            <thead>
+                <tr>
+                    <th>设备名称</th>
+                    <th class="history-point-cell">数据项</th>
+                    <th class="history-value-cell">最新历史值</th>
+                    <th class="history-time-cell">最后更新时间</th>
+                    <th class="history-action-cell">操作</th>
+                </tr>
+            </thead>
+            <tbody>
+            {{range .Rows}}
+                <tr class="{{if .HasHistory}}row-live{{else}}row-muted{{end}}">
+                    <td><strong class="history-overview-name">{{defaultText .DeviceName}}</strong></td>
+                    <td class="history-point-cell">
+                        <span class="metric-chip history-data-item-chip"><b>{{defaultText .PointDisplayName}}</b></span>
+                    </td>
+                    <td class="history-value-cell">{{.LatestValueText}}</td>
+                    <td class="history-time-cell">{{.LastUpdatedText}}</td>
+                    <td class="history-action-cell"><a class="btn btn-small" href="{{.DetailURL}}&return={{urlquery $.RefreshURL}}">查看趋势</a></td>
+                </tr>
+            {{end}}
+            </tbody>
+        </table>
+    </div>
+    {{else}}
+    <div class="empty-block history-overview-empty">
+        <strong>{{.EmptyStateText}}</strong>
+        <span class="empty-secondary">{{.EmptyStateDescription}}</span>
+    </div>
+    {{end}}
+        </div>
+    </div>
+</section>
+{{end}}

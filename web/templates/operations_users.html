@@ -1,0 +1,162 @@
+{{define "role_options"}}
+{{/* 用户表单复用的角色选项；超级管理员为内置角色，不在普通选项中创建。 */}}
+<option value="engineer" {{if eq . "engineer"}}selected{{end}}>工程师</option>
+<option value="operator" {{if eq . "operator"}}selected{{end}}>操作员</option>
+<option value="viewer" {{if eq . "viewer"}}selected{{end}}>只读用户</option>
+{{end}}
+
+{{define "content"}}
+{{/* 用户管理页：展示固定权限说明，并通过服务端接口执行用户和密码变更。 */}}
+<section class="operations-users-page page-fill page-viewport-root">
+    <header class="operations-users-title subpage-header">
+        <div class="subpage-header-top">
+            <a class="subpage-back-button" href="/operations" aria-label="返回运维管理" title="返回运维管理"><span class="subpage-back-icon" aria-hidden="true"><svg class="ui-icon"><use href="#icon-back"></use></svg></span><span>返回运维管理</span></a>
+            <span class="subpage-origin-badge">运维管理</span>
+        </div>
+    </header>
+
+    <article class="panel tech-frame settings-card operations-users-list-card">
+        <div class="settings-card-head operations-users-list-head">
+            <div class="module-copy">
+                <div class="operations-users-title-row">
+                    <h2>用户列表</h2>
+                    {{if .CanManageUsers}}<button class="btn btn-primary" type="button" data-channel-modal-open="web-user-create-modal">新建用户</button>{{end}}
+                </div>
+                <p class="panel-subtitle">用户名创建后不可修改；角色或启用状态变更后，目标用户需重新登录。</p>
+            </div>
+        </div>
+        {{if .UsersState.ErrorMessage}}
+        <p class="settings-danger-hint">{{userErrorText .UsersState.ErrorMessage}}</p>
+        {{else}}
+        <div class="operations-table-wrap">
+            <table class="operations-table">
+                <thead>
+                    <tr>
+                        <th>用户名</th>
+                        <th>显示名称</th>
+                        <th>角色</th>
+                        <th>状态</th>
+                        <th>最近登录</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .Users}}
+                    <tr>
+                        <td><strong>{{.Username}}</strong></td>
+                        <td>{{defaultText .DisplayName}}</td>
+                        <td>{{roleLabel .Role}}</td>
+                        <td>{{if .Enabled}}启用{{else}}禁用{{end}}</td>
+                        <td>{{formatTimestamp .LastLoginAtMS}}</td>
+                        <td>
+                            {{if $.CanManageUsers}}
+                            <div class="operations-actions">
+                                <button class="btn btn-small btn-secondary" type="button" data-channel-modal-open="web-user-edit-{{.Username}}">编辑</button>
+                                <button class="btn btn-small btn-secondary" type="button" data-channel-modal-open="web-user-reset-{{.Username}}">重置密码</button>
+                            </div>
+                            {{else}}
+                            <span class="muted-text">无操作权限</span>
+                            {{end}}
+                        </td>
+                    </tr>
+                    {{else}}
+                    <tr><td colspan="6" class="empty-cell">暂无用户。</td></tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+        {{end}}
+    </article>
+</section>
+
+{{if .CanManageUsers}}
+<div class="channel-modal" id="web-user-create-modal" aria-hidden="true">
+    <div class="channel-modal-backdrop" data-channel-modal-close></div>
+    <div class="channel-modal-dialog tech-frame operations-modal" role="dialog" aria-modal="true" aria-labelledby="web-user-create-title">
+        <header class="channel-modal-header">
+            <h3 id="web-user-create-title">新建用户</h3>
+            <button type="button" class="btn btn-secondary btn-inline" data-channel-modal-close>关闭</button>
+        </header>
+        <form class="settings-form modal-form-shell operations-modal-form" method="post" action="/operations/users/create">
+            <div class="channel-modal-body modal-form-scroll">
+                <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                <input type="hidden" name="redirect" value="/operations/users">
+                <div class="channel-form-grid settings-compact-grid">
+                    <label class="form-field"><span class="field-label">用户名</span><input name="username" maxlength="64" autocomplete="off" required></label>
+                    <label class="form-field"><span class="field-label">显示名称</span><input name="display_name" data-keyboard="text-cn" maxlength="64" autocomplete="off"></label>
+                    <label class="form-field"><span class="field-label">角色</span><select name="role" data-role-preview-select>{{template "role_options" "operator"}}</select></label>
+                    <label class="form-field"><span class="field-label">初始密码</span><input name="password" type="password" data-keyboard="password" maxlength="256" autocomplete="new-password" required></label>
+                    <label class="checkbox-label form-field-wide"><input name="enabled" type="checkbox" checked>创建后立即启用</label>
+                </div>
+                <section class="role-preview" data-role-preview aria-live="polite"></section>
+            </div>
+            <footer class="channel-form-actions modal-form-footer"><button type="button" class="btn btn-secondary" data-channel-modal-close>取消</button><button class="btn btn-primary" type="submit">创建用户</button></footer>
+        </form>
+    </div>
+</div>
+
+{{range .Users}}
+<div class="channel-modal" id="web-user-edit-{{.Username}}" aria-hidden="true">
+    <div class="channel-modal-backdrop" data-channel-modal-close></div>
+    <div class="channel-modal-dialog tech-frame operations-modal" role="dialog" aria-modal="true" aria-labelledby="web-user-edit-title-{{.Username}}">
+        <header class="channel-modal-header">
+            <h3 id="web-user-edit-title-{{.Username}}">编辑用户：{{.Username}}</h3>
+            <button type="button" class="btn btn-secondary btn-inline" data-channel-modal-close>关闭</button>
+        </header>
+        <form class="settings-form modal-form-shell operations-modal-form" method="post" action="/operations/users/update">
+            <div class="channel-modal-body modal-form-scroll">
+                <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                <input type="hidden" name="redirect" value="/operations/users">
+                <input type="hidden" name="username" value="{{.Username}}">
+                <div class="channel-form-grid settings-compact-grid">
+                    <label class="form-field"><span class="field-label">用户名</span><input value="{{.Username}}" disabled></label>
+                    <label class="form-field"><span class="field-label">显示名称</span><input name="display_name" data-keyboard="text-cn" value="{{.DisplayName}}" maxlength="64" autocomplete="off"></label>
+                    {{if eq .Role "super_admin"}}
+                    <label class="form-field">
+                        <span class="field-label">角色</span>
+                        <input value="超级管理员" disabled>
+                        <input type="hidden" name="role" value="super_admin">
+                    </label>
+                    {{else}}
+                    <label class="form-field"><span class="field-label">角色</span><select name="role" data-role-preview-select>{{template "role_options" .Role}}</select></label>
+                    {{end}}
+                    <label class="checkbox-label form-field-wide"><input name="enabled" type="checkbox" {{if .Enabled}}checked{{end}}>启用该用户</label>
+                </div>
+                {{if eq .Role "super_admin"}}
+                <p class="settings-danger-hint">超级管理员为系统内置最高权限角色，不支持在此页面变更。</p>
+                <section class="role-preview" data-role-preview data-role-preview-role="super_admin" aria-live="polite"></section>
+                {{else}}
+                <section class="role-preview" data-role-preview aria-live="polite"></section>
+                {{end}}
+                <p class="field-hint">不能禁用或降级最后一个超级管理员；当前超级管理员不能禁用自己或将自己降级。</p>
+            </div>
+            <footer class="channel-form-actions modal-form-footer"><button type="button" class="btn btn-secondary" data-channel-modal-close>取消</button><button class="btn btn-primary" type="submit">保存用户</button></footer>
+        </form>
+    </div>
+</div>
+
+<div class="channel-modal" id="web-user-reset-{{.Username}}" aria-hidden="true">
+    <div class="channel-modal-backdrop" data-channel-modal-close></div>
+    <div class="channel-modal-dialog tech-frame operations-modal" role="dialog" aria-modal="true" aria-labelledby="web-user-reset-title-{{.Username}}">
+        <header class="channel-modal-header">
+            <h3 id="web-user-reset-title-{{.Username}}">重置密码：{{.Username}}</h3>
+            <button type="button" class="btn btn-secondary btn-inline" data-channel-modal-close>关闭</button>
+        </header>
+        <form class="settings-form modal-form-shell operations-modal-form" method="post" action="/operations/users/reset-password">
+            <div class="channel-modal-body modal-form-scroll">
+                <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                <input type="hidden" name="redirect" value="/operations/users">
+                <input type="hidden" name="username" value="{{.Username}}">
+                <div class="channel-form-grid settings-compact-grid">
+                    <label class="form-field"><span class="field-label">新密码</span><input name="new_password" type="password" data-keyboard="password" maxlength="256" autocomplete="new-password" required></label>
+                    <label class="form-field"><span class="field-label">确认新密码</span><input name="confirm_password" type="password" data-keyboard="password" maxlength="256" autocomplete="new-password" required></label>
+                </div>
+                <p class="field-hint">重置成功后，该用户已有会话会立即失效。</p>
+            </div>
+            <footer class="channel-form-actions modal-form-footer"><button type="button" class="btn btn-secondary" data-channel-modal-close>取消</button><button class="btn btn-primary" type="submit">重置密码</button></footer>
+        </form>
+    </div>
+</div>
+{{end}}
+{{end}}
+{{end}}

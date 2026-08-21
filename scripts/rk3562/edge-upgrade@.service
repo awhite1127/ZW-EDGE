@@ -1,0 +1,22 @@
+[Unit]
+Description=Edge Controller Application Upgrade Job %i
+After=local-fs.target
+After=edge-upgrade-recovery.service
+OnFailure=edge-upgrade-recovery.service
+ConditionPathIsDirectory=/opt/edge-controller/update/jobs/%i
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/edge-controller/update/jobs/%i
+ExecStartPre=/usr/bin/chown root:edge-controller /opt/edge-controller/log/update.log
+ExecStartPre=/usr/bin/chmod 0640 /opt/edge-controller/log/update.log
+ExecStart=/usr/bin/python3 /opt/edge-controller/update/jobs/%i/runner.py run --job-id %i
+TimeoutStartSec=15min
+UMask=0077
+StandardOutput=append:/opt/edge-controller/log/update.log
+StandardError=append:/opt/edge-controller/log/update.log
+
+[Install]
+WantedBy=multi-user.target

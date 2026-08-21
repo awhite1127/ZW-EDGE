@@ -1,0 +1,462 @@
+{{define "channels_panel"}}
+{{/* 通道配置局部模板：展示串口/TCP 参数、运行诊断和编辑入口。 */}}
+{{$page := .}}
+<section class="panel tech-frame">
+    <div class="module-head">
+        <div class="module-copy">
+            <h2>通道配置</h2>
+            <p class="panel-subtitle">串口 RTU 与 Modbus TCP 通信链路</p>
+        </div>
+        <div class="module-tools toolbar-strip">
+            {{if .CanModify}}<button type="button" class="btn btn-primary" data-channel-modal-open="channel-modal-create">新增通道</button>{{end}}
+        </div>
+    </div>
+
+    {{if and .PollingRunning .ShowPollingNotice}}
+    <section class="flash flash-info config-lock-banner">
+        <span>采集运行中，保存后自动恢复。</span>
+    </section>
+    {{end}}
+
+    <div class="table-shell collection-list-shell channels-table">
+        <table class="data-table monitor-table collection-list-table">
+            <colgroup>
+                <col class="col-name">
+                <col class="col-id">
+                <col class="col-port">
+                <col class="col-param">
+                <col class="col-diagnosis">
+                <col class="col-action">
+            </colgroup>
+            <thead>
+                <tr>
+                    <th>通道名称</th>
+                    <th>通道 ID</th>
+                    <th>链路目标</th>
+                    <th>通信参数</th>
+                    <th>诊断说明</th>
+                    <th class="collection-action-header">操作</th>
+                </tr>
+            </thead>
+            <tbody>
+            {{range .Rows}}
+                <tr>
+                    <td><div class="table-primary" title="{{.Config.ChannelName}}">{{.Config.ChannelName}}</div></td>
+                    <td><code title="{{.Config.ChannelID}}">{{.Config.ChannelID}}</code></td>
+                    <td class="channel-port-cell" title="{{defaultText .EndpointText}}"><code>{{defaultText .EndpointText}}</code></td>
+                    <td>
+                        <div class="table-secondary channel-param-list">
+                            <span title="{{.ParamText}}">{{.ParamText}}</span>
+                        </div>
+                    </td>
+                    <td class="wrap-text collection-diagnosis-cell channel-diagnosis-cell">
+                        <div class="collection-diagnosis-content"><span class="{{channelDiagnosticClass .}}" title="{{channelDiagnosticText .}}">{{channelDiagnosticText .}}</span></div>
+                    </td>
+                    <td class="collection-action-cell">
+                        <div class="table-actions collection-row-actions channel-row-actions">
+                            <a class="btn btn-small btn-secondary" href="/collection/channels/{{urlPath .Config.ChannelID}}/communication-traces?return=%2Fcollection%23channels">通讯报文</a>
+                            {{if $page.CanModify}}
+                            <button type="button" class="btn btn-small btn-primary" data-channel-modal-open="channel-modal-{{.Config.ChannelID}}">编辑配置</button>
+                            <button
+                                type="button"
+                                class="btn btn-small btn-danger"
+                                data-channel-delete
+                                data-delete-url="/api/channels/{{.Config.ChannelID}}"
+                                data-channel-name="{{.Config.ChannelName}}">
+                                删除通道
+                            </button>
+                            {{end}}
+                        </div>
+                    </td>
+                </tr>
+            {{else}}
+                <tr>
+                    <td colspan="6" class="empty-cell">
+                        <div class="collect-manage-empty">
+                            {{if .CanModify}}
+                            <strong>暂无通道</strong>
+                            <span class="empty-secondary">请先新增通信通道。</span>
+                            {{else}}
+                            <strong>暂无可查看的通信通道</strong>
+                            <span class="empty-secondary">当前没有可展示的通道配置。</span>
+                            {{end}}
+                        </div>
+                    </td>
+                </tr>
+            {{end}}
+            </tbody>
+        </table>
+    </div>
+
+    {{if .CanModify}}
+    {{range .Rows}}
+        <div class="channel-modal" id="channel-modal-{{.Config.ChannelID}}" aria-hidden="true">
+            <div class="channel-modal-backdrop" data-channel-modal-close></div>
+            <div class="channel-modal-dialog tech-frame" role="dialog" aria-modal="true" aria-labelledby="channel-modal-title-{{.Config.ChannelID}}">
+                <header class="channel-modal-header">
+                    <div>
+                        <div class="hero-kicker">通道配置</div>
+                        <h3 id="channel-modal-title-{{.Config.ChannelID}}">编辑 {{.Config.ChannelName}}</h3>
+                        <p>调整链路目标和通信参数，保存后立即刷新页面状态。</p>
+                    </div>
+                    <button type="button" class="btn btn-secondary btn-inline modal-close-btn" data-channel-modal-close>关闭</button>
+                </header>
+
+                <form class="channel-config-form modal-form-shell" data-save-url="/api/channels/{{urlPath .Config.ChannelID}}" data-method="PUT" data-submit-label="保存通道">
+                    <div class="channel-modal-body modal-form-scroll">
+                        <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                        <input type="hidden" name="channel_id" value="{{.Config.ChannelID}}">
+
+                        <div class="channel-section-grid">
+                            <section class="form-section form-section-span-2 channel-config-section">
+                                <div class="form-section-head">
+                                    <div>
+                                        <h4>通道配置</h4>
+                                    </div>
+                                </div>
+
+                                <div class="form-subsection">
+                                    <h5>基础信息</h5>
+                                    <div class="channel-form-grid">
+                                        <div class="form-field">
+                                            <label class="field-label" for="channel-name-{{.Config.ChannelID}}">通道名称</label>
+                                            <input id="channel-name-{{.Config.ChannelID}}" name="channel_name" type="text" data-keyboard="text-cn" value="{{.Config.ChannelName}}">
+                                        </div>
+
+                                        <div class="form-field form-field-checkbox">
+                                            <label class="checkbox-label" for="channel-enabled-{{.Config.ChannelID}}">
+                                                <input id="channel-enabled-{{.Config.ChannelID}}" name="enabled" type="checkbox" {{if .Config.Enabled}}checked{{end}}>
+                                                <span>启用该通道</span>
+                                            </label>
+                                        </div>
+
+                                        <div class="form-field">
+                                            <span class="field-label">通道 ID</span>
+                                            <div class="form-readonly-value"><code>{{.Config.ChannelID}}</code></div>
+                                        </div>
+
+                                        <div class="form-field">
+                                            <label class="field-label" for="channel-type-{{.Config.ChannelID}}">通道类型</label>
+                                            <select id="channel-type-{{.Config.ChannelID}}" name="channel_type" data-channel-type-select>
+                                                <option value="modbus_rtu_serial" {{if eq .Config.ChannelType "modbus_rtu_serial"}}selected{{end}}>Modbus RTU 串口</option>
+                                                <option value="modbus_tcp" {{if eq .Config.ChannelType "modbus_tcp"}}selected{{end}}>Modbus TCP</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="form-subsection" data-channel-type-section="modbus_rtu_serial">
+                                    <h5>串口绑定</h5>
+                                    <div class="serial-binding-panel">
+                                        <div class="form-field serial-binding-main-field">
+                                            <label class="field-label" for="channel-port-select-{{.Config.ChannelID}}">绑定串口</label>
+                                            <div class="serial-binding-control">
+                                                <select id="channel-port-select-{{.Config.ChannelID}}" name="port_name" class="serial-candidate-select">
+                                                    {{if and .SerialBinding.CurrentPortPath (not .SerialBinding.CurrentPortFound)}}
+                                                    <option value="{{.SerialBinding.CurrentPortPath}}" selected>{{.SerialBinding.CurrentPortPath}}（当前绑定，未在本次扫描中发现）</option>
+                                                    {{else if not .SerialBinding.CurrentPortPath}}
+                                                    <option value="">请选择绑定串口</option>
+                                                    {{end}}
+                                                    {{range .SerialBinding.Candidates}}
+                                                    <option value="{{.Path}}" data-available="{{.Available}}" {{if .IsCurrent}}selected{{end}}>
+                                                        {{.DisplayName}} ({{.Path}}){{if not .Available}}（仅发现）{{end}}
+                                                    </option>
+                                                    {{end}}
+                                                </select>
+                                            </div>
+                                            <p class="field-hint">请选择系统扫描到的串口，保存时写入对应 /dev/* 路径。</p>
+                                        </div>
+
+                                        <div class="serial-binding-notes">
+                                        <p>当前绑定：<code>{{defaultText .SerialBinding.CurrentPortPath}}</code></p>
+                                        {{if .SerialBinding.CurrentPortFound}}
+                                        <p class="note-status-ok">扫描状态：当前绑定已在系统候选中识别到</p>
+                                        {{else if .SerialBinding.CurrentPortPath}}
+                                        <p class="note-status-warn">扫描状态：当前绑定未在本次扫描中发现，请确认设备连接状态</p>
+                                        {{else}}
+                                        <p>扫描状态：尚未绑定</p>
+                                        {{end}}
+                                        <p class="wrap-text {{if .Status.LastErrorMessage}}note-status-warn{{end}}">诊断说明：{{if .HasStatus}}{{channelErrorText .Status.LastErrorMessage}}{{else}}无{{end}}</p>
+                                        {{if .HasStatus}}{{with diagnosisSuggestionText .Status.Diagnosis}}<p class="wrap-text note-status-warn">建议检查：{{.}}</p>{{end}}{{end}}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="form-subsection" data-channel-type-section="modbus_tcp">
+                                    <h5>TCP 目标</h5>
+                                    <div class="channel-form-grid">
+                                        <div class="form-field">
+                                            <label class="field-label" for="channel-tcp-host-{{.Config.ChannelID}}">远端 IP / 主机名</label>
+                                            <input id="channel-tcp-host-{{.Config.ChannelID}}" name="tcp_host" type="text" value="{{.Config.TCPHost}}" placeholder="例如：192.168.1.20">
+                                        </div>
+                                        <div class="form-field">
+                                            <label class="field-label" for="channel-tcp-port-{{.Config.ChannelID}}">远端端口</label>
+                                            <input id="channel-tcp-port-{{.Config.ChannelID}}" name="tcp_port" type="number" min="1" max="65535" value="{{.Config.TCPPort}}">
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <section class="form-section" data-channel-type-section="modbus_rtu_serial">
+                                <div class="form-section-head">
+                                    <div>
+                                        <h4>通信参数</h4>
+                                    </div>
+                                </div>
+                                <div class="channel-form-grid">
+                                    <div class="form-field">
+                                        <label class="field-label" for="channel-baud-{{.Config.ChannelID}}">波特率</label>
+                                        <select id="channel-baud-{{.Config.ChannelID}}" name="baud_rate">
+                                            <option value="1200" {{if eq .Config.BaudRate 1200}}selected{{end}}>1200</option>
+                                            <option value="2400" {{if eq .Config.BaudRate 2400}}selected{{end}}>2400</option>
+                                            <option value="4800" {{if eq .Config.BaudRate 4800}}selected{{end}}>4800</option>
+                                            <option value="9600" {{if eq .Config.BaudRate 9600}}selected{{end}}>9600</option>
+                                            <option value="19200" {{if eq .Config.BaudRate 19200}}selected{{end}}>19200</option>
+                                            <option value="38400" {{if eq .Config.BaudRate 38400}}selected{{end}}>38400</option>
+                                            <option value="57600" {{if eq .Config.BaudRate 57600}}selected{{end}}>57600</option>
+                                            <option value="115200" {{if eq .Config.BaudRate 115200}}selected{{end}}>115200</option>
+                                        </select>
+                                    </div>
+
+                                    <div class="form-field">
+                                        <label class="field-label" for="channel-data-bits-{{.Config.ChannelID}}">数据位</label>
+                                        <select id="channel-data-bits-{{.Config.ChannelID}}" name="data_bits">
+                                            <option value="5" {{if eq .Config.DataBits 5}}selected{{end}}>5</option>
+                                            <option value="6" {{if eq .Config.DataBits 6}}selected{{end}}>6</option>
+                                            <option value="7" {{if eq .Config.DataBits 7}}selected{{end}}>7</option>
+                                            <option value="8" {{if eq .Config.DataBits 8}}selected{{end}}>8</option>
+                                        </select>
+                                    </div>
+
+                                    <div class="form-field">
+                                        <label class="field-label" for="channel-parity-{{.Config.ChannelID}}">校验位</label>
+                                        <select id="channel-parity-{{.Config.ChannelID}}" name="parity">
+                                            <option value="none" {{if eq .Config.Parity "none"}}selected{{end}}>无校验</option>
+                                            <option value="even" {{if eq .Config.Parity "even"}}selected{{end}}>偶校验</option>
+                                            <option value="odd" {{if eq .Config.Parity "odd"}}selected{{end}}>奇校验</option>
+                                        </select>
+                                    </div>
+
+                                    <div class="form-field">
+                                        <label class="field-label" for="channel-stop-bits-{{.Config.ChannelID}}">停止位</label>
+                                        <select id="channel-stop-bits-{{.Config.ChannelID}}" name="stop_bits">
+                                            <option value="1" {{if eq .Config.StopBits 1}}selected{{end}}>1</option>
+                                            <option value="2" {{if eq .Config.StopBits 2}}selected{{end}}>2</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <section class="form-section">
+                                <div class="form-section-head">
+                                    <div>
+                                        <h4>可靠性参数</h4>
+                                    </div>
+                                </div>
+                                <div class="channel-form-grid">
+                                    <div class="form-field">
+                                        <label class="field-label" for="channel-timeout-{{.Config.ChannelID}}">超时 (ms)</label>
+                                        <input id="channel-timeout-{{.Config.ChannelID}}" name="response_timeout_ms" type="number" min="1" max="60000" value="{{.Config.ResponseTimeoutMS}}">
+                                    </div>
+                                    <div class="form-field" data-channel-type-section="modbus_tcp">
+                                        <label class="field-label" for="channel-connect-timeout-{{.Config.ChannelID}}">建连超时 (ms)</label>
+                                        <input id="channel-connect-timeout-{{.Config.ChannelID}}" name="connect_timeout_ms" type="number" min="1" max="60000" value="{{.Config.ConnectTimeoutMS}}">
+                                    </div>
+
+                                    <div class="form-field">
+                                        <label class="field-label" for="channel-retry-{{.Config.ChannelID}}">重试次数</label>
+                                        <input id="channel-retry-{{.Config.ChannelID}}" name="retry_count" type="number" min="0" max="10" value="{{.Config.RetryCount}}">
+                                    </div>
+                                </div>
+                            </section>
+
+                        </div>
+                    </div>
+                    <footer class="template-editor-footer modal-form-footer">
+                        <span></span>
+                        <div class="modal-actions">
+                            <button type="button" class="btn btn-secondary" data-channel-modal-close>取消</button>
+                            <button type="submit" class="btn btn-primary">保存通道</button>
+                        </div>
+                    </footer>
+                </form>
+            </div>
+        </div>
+    {{end}}
+    {{end}}
+</section>
+
+{{if .CanModify}}
+<div class="channel-modal" id="channel-modal-create" aria-hidden="true">
+    <div class="channel-modal-backdrop" data-channel-modal-close></div>
+    <div class="channel-modal-dialog tech-frame" role="dialog" aria-modal="true" aria-labelledby="channel-modal-title-create">
+        <header class="channel-modal-header">
+            <div>
+                <div class="hero-kicker">通道配置</div>
+                <h3 id="channel-modal-title-create">新增通道</h3>
+                <p>新增 Modbus 采集通道，保存后即可在主站配置中选择绑定。</p>
+            </div>
+            <button type="button" class="btn btn-secondary btn-inline modal-close-btn" data-channel-modal-close>关闭</button>
+        </header>
+        <form class="channel-config-form modal-form-shell" data-save-url="/api/channels" data-method="POST" data-submit-label="保存通道">
+            <div class="channel-modal-body modal-form-scroll">
+                <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                <div class="channel-section-grid">
+                    <section class="form-section form-section-span-2 channel-config-section">
+                        <div class="form-section-head">
+                            <div>
+                                <h4>通道配置</h4>
+                            </div>
+                        </div>
+
+                        <div class="form-subsection">
+                            <h5>基础信息</h5>
+                            <div class="channel-form-grid">
+                                <div class="form-field">
+                                    <label class="field-label" for="channel-id-create">通道 ID</label>
+                                    <input id="channel-id-create" name="channel_id" type="text" placeholder="例如：ch2" required>
+                                </div>
+                                <div class="form-field">
+                                    <label class="field-label" for="channel-name-create">通道名称</label>
+                                    <input id="channel-name-create" name="channel_name" type="text" data-keyboard="text-cn" placeholder="请输入通道名称" required>
+                                </div>
+                                <div class="form-field form-field-checkbox">
+                                    <label class="checkbox-label" for="channel-enabled-create">
+                                        <input id="channel-enabled-create" name="enabled" type="checkbox" checked>
+                                        <span>保存后立即启用</span>
+                                    </label>
+                                </div>
+                                <div class="form-field">
+                                    <label class="field-label" for="channel-type-create">通道类型</label>
+                                    <select id="channel-type-create" name="channel_type" data-channel-type-select>
+                                        <option value="modbus_rtu_serial" selected>Modbus RTU 串口</option>
+                                        <option value="modbus_tcp">Modbus TCP</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-subsection" data-channel-type-section="modbus_rtu_serial">
+                            <h5>串口绑定</h5>
+                            <div class="serial-binding-panel">
+                                <div class="form-field serial-binding-main-field">
+                                    <label class="field-label" for="channel-port-select-create">绑定串口</label>
+                                    <div class="serial-binding-control">
+                                        <select id="channel-port-select-create" name="port_name" class="serial-candidate-select">
+                                            <option value="">请选择绑定串口</option>
+                                            {{range .SerialPorts}}
+                                            <option value="{{.Path}}" data-available="{{.Available}}">
+                                                {{.DisplayName}} ({{.Path}}){{if not .Available}}（仅发现）{{end}}
+                                            </option>
+                                            {{end}}
+                                        </select>
+                                    </div>
+                                    <p class="field-hint">请选择系统扫描到的串口，保存时写入对应 /dev/* 路径。</p>
+                                </div>
+
+                                <div class="serial-binding-notes">
+                                <p>当前绑定：无</p>
+                                <p>扫描状态：新增通道尚未绑定</p>
+                                <p>诊断说明：无</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-subsection" data-channel-type-section="modbus_tcp">
+                            <h5>TCP 目标</h5>
+                            <div class="channel-form-grid">
+                                <div class="form-field">
+                                    <label class="field-label" for="channel-tcp-host-create">远端 IP / 主机名</label>
+                                    <input id="channel-tcp-host-create" name="tcp_host" type="text" placeholder="例如：192.168.1.20">
+                                </div>
+                                <div class="form-field">
+                                    <label class="field-label" for="channel-tcp-port-create">远端端口</label>
+                                    <input id="channel-tcp-port-create" name="tcp_port" type="number" min="1" max="65535" value="502">
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="form-section" data-channel-type-section="modbus_rtu_serial">
+                        <div class="form-section-head">
+                            <div>
+                                <h4>通信参数</h4>
+                            </div>
+                        </div>
+                        <div class="channel-form-grid">
+                            <div class="form-field">
+                                <label class="field-label" for="channel-baud-create">波特率</label>
+                                <select id="channel-baud-create" name="baud_rate">
+                                    <option value="1200">1200</option>
+                                    <option value="2400">2400</option>
+                                    <option value="4800">4800</option>
+                                    <option value="9600" selected>9600</option>
+                                    <option value="19200">19200</option>
+                                    <option value="38400">38400</option>
+                                    <option value="57600">57600</option>
+                                    <option value="115200">115200</option>
+                                </select>
+                            </div>
+                            <div class="form-field">
+                                <label class="field-label" for="channel-data-bits-create">数据位</label>
+                                <select id="channel-data-bits-create" name="data_bits">
+                                    <option value="5">5</option>
+                                    <option value="6">6</option>
+                                    <option value="7">7</option>
+                                    <option value="8" selected>8</option>
+                                </select>
+                            </div>
+                            <div class="form-field">
+                                <label class="field-label" for="channel-parity-create">校验位</label>
+                                <select id="channel-parity-create" name="parity">
+                                    <option value="none" selected>无校验</option>
+                                    <option value="even">偶校验</option>
+                                    <option value="odd">奇校验</option>
+                                </select>
+                            </div>
+                            <div class="form-field">
+                                <label class="field-label" for="channel-stop-bits-create">停止位</label>
+                                <select id="channel-stop-bits-create" name="stop_bits">
+                                    <option value="1" selected>1</option>
+                                    <option value="2">2</option>
+                                </select>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="form-section">
+                        <div class="form-section-head">
+                            <div>
+                                <h4>可靠性参数</h4>
+                            </div>
+                        </div>
+                        <div class="channel-form-grid">
+                            <div class="form-field">
+                                <label class="field-label" for="channel-timeout-create">超时 (ms)</label>
+                                <input id="channel-timeout-create" name="response_timeout_ms" type="number" min="1" max="60000" value="1000">
+                            </div>
+                            <div class="form-field" data-channel-type-section="modbus_tcp">
+                                <label class="field-label" for="channel-connect-timeout-create">建连超时 (ms)</label>
+                                <input id="channel-connect-timeout-create" name="connect_timeout_ms" type="number" min="1" max="60000" value="3000">
+                            </div>
+                            <div class="form-field">
+                                <label class="field-label" for="channel-retry-create">重试次数</label>
+                                <input id="channel-retry-create" name="retry_count" type="number" min="0" max="10" value="2">
+                            </div>
+                        </div>
+                    </section>
+
+                </div>
+            </div>
+            <footer class="template-editor-footer modal-form-footer">
+                <span></span>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" data-channel-modal-close>取消</button>
+                    <button type="submit" class="btn btn-primary">保存通道</button>
+                </div>
+            </footer>
+        </form>
+    </div>
+</div>
+{{end}}
+{{end}}

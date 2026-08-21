@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Edge Controller Kiosk
+Comment=Start Edge Controller local kiosk
+Exec=/home/kickpi/.local/bin/start-edge-kiosk.sh
+Terminal=false
+X-GNOME-Autostart-enabled=true

@@ -1,0 +1,18 @@
+[Unit]
+Description=Edge Controller Log Rotator
+After=edge-upgrade-recovery.service edge-controller.service edge-web.service
+
+[Service]
+Type=simple
+User=root
+Group=edge-controller
+WorkingDirectory=/opt/edge-controller
+EnvironmentFile=/opt/edge-controller/config/edge-controller.env
+ExecCondition=+/usr/bin/python3 /opt/edge-controller/update/recovery/update-manager.py service-start-allowed
+ExecStart=/opt/edge-controller/scripts/rotate-logs.sh --loop
+Restart=on-failure
+RestartSec=3
+UMask=0007
+
+[Install]
+WantedBy=multi-user.target

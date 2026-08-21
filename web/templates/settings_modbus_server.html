@@ -1,0 +1,147 @@
+{{define "content"}}
+<header class="modbus-page-head subpage-header subpage-toolbar-compact">
+    <div class="subpage-header-top">
+        <a class="subpage-back-button" href="/settings" aria-label="返回系统设置" title="返回系统设置"><span class="subpage-back-icon" aria-hidden="true"><svg class="ui-icon"><use href="#icon-back"></use></svg></span><span>返回系统设置</span></a>
+        <div class="module-tools"><button class="btn btn-secondary btn-small" type="button" data-modbus-refresh>手动刷新</button></div>
+    </div>
+</header>
+
+<section class="modbus-server-page page-fill" data-modbus-server-page
+    data-can-manage-server="{{.CanManageModbusServer}}" data-can-manage-mappings="{{.CanManageModbusMappings}}"
+    data-points-available="{{.PointsState.Available}}" data-snapshot="{{jsonAttr .Snapshot}}" data-points="{{jsonAttr .ExportablePoints}}">
+    {{if .SnapshotState.ErrorMessage}}<span hidden data-initial-toast data-toast-type="error" data-toast-message="{{.SnapshotState.ErrorMessage}}"></span>{{end}}
+    {{if .PointsState.ErrorMessage}}<span hidden data-initial-toast data-toast-type="error" data-toast-message="{{.PointsState.ErrorMessage}}"></span>{{end}}
+
+    <nav class="modbus-view-tabs" role="tablist" aria-label="Modbus 北向服务配置视图">
+        <button class="modbus-view-tab is-active" id="modbus-tab-mappings" type="button" role="tab" aria-selected="true" aria-controls="modbus-panel-mappings" tabindex="0" data-modbus-tab="mappings">寄存器映射</button>
+        <button class="modbus-view-tab" id="modbus-tab-settings" type="button" role="tab" aria-selected="false" aria-controls="modbus-panel-settings" tabindex="-1" data-modbus-tab="settings">Server 设置</button>
+    </nav>
+
+    <div class="modbus-tab-panel" id="modbus-panel-mappings" role="tabpanel" aria-labelledby="modbus-tab-mappings" data-modbus-tab-panel="mappings">
+        <section class="panel tech-frame settings-card modbus-mappings-panel">
+            <div class="module-head settings-card-head">
+                <div class="module-copy"><h2>寄存器映射</h2><p class="panel-subtitle">禁用仍占用地址；删除后释放。</p></div>
+                <div class="module-tools">{{if .CanManageModbusMappings}}<button class="btn btn-primary btn-small" type="button" data-mapping-create aria-haspopup="dialog" aria-controls="modbus-mapping-modal">新增映射</button>{{end}}</div>
+            </div>
+            <div class="table-shell table-shell-wide modbus-mapping-table">
+                <table class="data-table">
+                    <colgroup>
+                        <col class="modbus-col-target">
+                        <col class="modbus-col-address">
+                        <col class="modbus-col-transform">
+                        <col class="modbus-col-state">
+                        <col class="modbus-col-action">
+                    </colgroup>
+                    <thead><tr><th>映射对象</th><th>寄存器</th><th>数值处理</th><th>状态</th><th>操作</th></tr></thead>
+                    <tbody data-mapping-rows></tbody>
+                </table>
+                <div class="empty-block" data-mapping-empty hidden><strong>暂无 Modbus 寄存器映射</strong>{{if .CanManageModbusMappings}}<span class="empty-secondary">点击“新增映射”发布设备数据项。</span>{{end}}</div>
+            </div>
+        </section>
+    </div>
+
+    <div class="modbus-tab-panel modbus-settings-tab-panel" id="modbus-panel-settings" role="tabpanel" aria-labelledby="modbus-tab-settings" data-modbus-tab-panel="settings" hidden>
+        <section class="panel tech-frame settings-card modbus-runtime-panel">
+            <div class="module-head settings-card-head">
+                <div class="module-copy"><h2>服务运行状态</h2><p class="panel-subtitle">状态自动刷新</p></div>
+                <span class="pill status-neutral" data-modbus-state>状态未知</span>
+            </div>
+            <div class="modbus-runtime-grid">
+                <div class="network-status-item"><span>监听端点</span><strong data-runtime-endpoint>-</strong></div>
+                <div class="network-status-item"><span>Unit ID</span><strong data-runtime-unit>-</strong></div>
+                <div class="network-status-item"><span>当前 / 累计连接</span><strong data-runtime-connections>0 / 0</strong></div>
+                <div class="network-status-item"><span>累计请求</span><strong data-runtime-requests>0</strong></div>
+                <div class="network-status-item"><span>正常 / 异常响应</span><strong data-runtime-responses>0 / 0</strong></div>
+                <div class="network-status-item"><span>最近请求 / 客户端</span><strong data-runtime-last>-</strong></div>
+            </div>
+            <p class="modbus-runtime-error" data-runtime-error hidden></p>
+            <p class="field-hint" data-runtime-unavailable hidden>状态暂时无法获取，稍后会自动重试。</p>
+        </section>
+
+        <section class="panel tech-frame settings-card modbus-settings-panel">
+            <div class="module-head settings-card-head">
+                <div class="module-copy"><h2>Server 设置</h2><p class="panel-subtitle">保存后立即应用。</p></div>
+                {{if not .CanManageModbusServer}}<span class="status-neutral">只读</span>{{end}}
+            </div>
+            <form class="settings-form" data-modbus-settings-form>
+                <div class="modbus-service-control">
+                    <div class="modbus-service-copy"><strong>服务开关</strong></div>
+                    <label class="modbus-toggle {{if not .CanManageModbusServer}}is-disabled{{end}}"><input name="enabled" type="checkbox" {{if not .CanManageModbusServer}}disabled{{end}}><span class="modbus-toggle-track" aria-hidden="true"></span><span class="modbus-toggle-text" data-modbus-enabled-text>已停用</span></label>
+                </div>
+                <div class="modbus-settings-grid">
+                    <label class="form-field"><span class="field-label">监听地址</span><input name="listen_address" data-keyboard="ip" maxlength="255" placeholder="0.0.0.0" required {{if not .CanManageModbusServer}}disabled{{end}}><small>0.0.0.0 表示全部 IPv4 网卡。</small></label>
+                    <label class="form-field"><span class="field-label">监听端口</span><input name="listen_port" type="number" min="1" max="65535" required {{if not .CanManageModbusServer}}disabled{{end}}></label>
+                    <label class="form-field"><span class="field-label">Unit ID</span><input name="unit_id" type="number" min="0" max="255" required {{if not .CanManageModbusServer}}disabled{{end}}></label>
+                    <label class="form-field modbus-inline-toggle-field"><span class="field-label">Unit ID 校验</span><span class="modbus-toggle-line"><span>仅接受配置的 Unit ID</span><span class="modbus-toggle {{if not .CanManageModbusServer}}is-disabled{{end}}"><input name="strict_unit_id" type="checkbox" {{if not .CanManageModbusServer}}disabled{{end}}><span class="modbus-toggle-track" aria-hidden="true"></span></span></span></label>
+                    <label class="form-field"><span class="field-label">最大客户端数</span><input name="max_clients" type="number" min="1" max="64" required {{if not .CanManageModbusServer}}disabled{{end}}></label>
+                    <label class="form-field"><span class="field-label">客户端空闲超时（秒）</span><input name="idle_timeout_seconds" type="number" min="5" max="3600" required {{if not .CanManageModbusServer}}disabled{{end}}></label>
+                    <label class="form-field"><span class="field-label">单次最大读取寄存器数</span><input name="max_read_registers" type="number" min="1" max="125" required {{if not .CanManageModbusServer}}disabled{{end}}></label>
+                </div>
+                {{if .CanManageModbusServer}}<div class="settings-center-actions"><button class="btn btn-primary" type="submit" data-settings-submit>保存并立即应用</button></div>{{end}}
+            </form>
+        </section>
+    </div>
+
+    {{if .CanManageModbusMappings}}
+    <div class="channel-modal" id="modbus-mapping-modal" aria-hidden="true">
+        <div class="channel-modal-backdrop" data-channel-modal-close></div>
+        <div class="channel-modal-dialog tech-frame modbus-mapping-modal" role="dialog" aria-modal="true" aria-labelledby="mapping-modal-title">
+            <header class="channel-modal-header"><div><h3 id="mapping-modal-title" data-mapping-modal-title>新增映射</h3></div><button class="btn btn-secondary btn-inline" type="button" data-channel-modal-close>关闭</button></header>
+            <form class="settings-form template-editor-form" data-mapping-form>
+                <div class="channel-modal-body modbus-mapping-modal-body">
+                    <input name="mapping_id" type="hidden">
+                    <section class="modbus-mapping-section">
+                        <header class="modbus-mapping-section-head"><h4>数据来源</h4></header>
+                        <div class="modbus-mapping-form-grid">
+                            <label class="form-field"><span class="field-label">设备</span><select name="device_id" required></select></label>
+                            <label class="form-field"><span class="field-label">数据项</span><select name="point_key" required></select><small data-point-detail></small></label>
+                        </div>
+                    </section>
+                    <section class="modbus-mapping-section">
+                        <header class="modbus-mapping-section-head"><h4>数据编码</h4></header>
+                        <div class="modbus-mapping-form-grid">
+                            <label class="form-field"><span class="field-label">数据类型</span><select name="data_type"><option value="uint16">16 位无符号整数（1 个）</option><option value="int16">16 位有符号整数（1 个）</option><option value="uint32">32 位无符号整数（2 个）</option><option value="int32">32 位有符号整数（2 个）</option><option value="float32">32 位浮点数（2 个）</option></select></label>
+                            <label class="form-field"><span class="field-label">数据起始地址（0 基）</span><input name="start_address" type="number" min="0" max="65535" required></label>
+                            <label class="form-field"><span class="field-label">质量寄存器地址（0 基）</span><input name="quality_address" type="number" min="0" max="65535" required></label>
+                            <label class="form-field"><span class="field-label">倍率</span><input name="value_multiplier" type="number" step="any" required></label>
+                            <label class="form-field"><span class="field-label">偏移</span><input name="value_offset" type="number" step="any" required></label>
+                            <label class="form-field"><span class="field-label">寄存器内字节顺序</span><select name="byte_order"><option value="big_endian">高字节在前（大端）</option><option value="little_endian">低字节在前（小端）</option></select></label>
+                            <label class="form-field" data-word-order-field><span class="field-label">32 位寄存器顺序</span><select name="word_order"><option value="high_word_first">高字在前</option><option value="low_word_first">低字在前</option></select></label>
+                        </div>
+                        <p class="modbus-order-help" data-word-order-help>该选项用于兼容不同 PLC、组态软件对 32 位整数和浮点数的寄存器排列方式。</p>
+                    </section>
+                    <section class="modbus-mapping-section modbus-mapping-publish-section" aria-label="发布状态">
+                        <label class="modbus-mapping-toggle-row">
+                            <span class="modbus-mapping-toggle-copy"><strong>启用此映射</strong></span>
+                            <span class="modbus-toggle"><input name="enabled" type="checkbox" checked><span class="modbus-toggle-track" aria-hidden="true"></span><span class="modbus-toggle-text" data-mapping-enabled-text>已启用</span></span>
+                        </label>
+                    </section>
+                    <section class="modbus-mapping-preview" data-address-preview>
+                        <header class="modbus-mapping-section-head"><h4>映射预览</h4></header>
+                        <div class="modbus-mapping-preview-grid">
+                            <div><span>计算公式</span><strong data-preview-formula>寄存器值 = 工程值 × 1 + 0</strong></div>
+                            <div><span>数据占用地址</span><strong data-preview-data-address>待输入</strong></div>
+                            <div><span>质量地址</span><strong data-preview-quality-address>待输入</strong></div>
+                            <div><span>传统寄存器编号</span><strong data-preview-traditional-address>待输入</strong></div>
+                            <div><span data-preview-order-label>当前字节排列</span><strong data-order-preview>AB</strong></div>
+                            <div class="modbus-preview-check"><span>地址预检查</span><strong data-preview-conflict>请输入数据地址和质量地址。</strong></div>
+                        </div>
+                    </section>
+                    <p class="form-feedback" data-mapping-feedback aria-live="polite"></p>
+                </div>
+                <footer class="template-editor-footer"><button class="btn btn-secondary" type="button" data-address-recommend>自动推荐地址</button><div class="modal-actions"><button class="btn btn-secondary" type="button" data-channel-modal-close>取消</button><button class="btn btn-primary" type="submit" data-mapping-submit>保存映射</button></div></footer>
+            </form>
+        </div>
+    </div>
+    <div class="channel-modal" id="modbus-delete-modal" aria-hidden="true">
+        <div class="channel-modal-backdrop" data-channel-modal-close></div>
+        <div class="channel-modal-dialog tech-frame modbus-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="modbus-delete-title">
+            <header class="channel-modal-header"><div><h3 id="modbus-delete-title">确认删除寄存器映射？</h3><p>删除后释放该地址，不影响设备与采集数据。</p></div></header>
+            <div class="channel-modal-body"><strong data-delete-target></strong></div>
+            <footer class="template-editor-footer"><div></div><div class="modal-actions"><button class="btn btn-secondary" type="button" data-channel-modal-close>取消</button><button class="btn btn-danger" type="button" data-delete-confirm>确认删除</button></div></footer>
+        </div>
+    </div>
+    {{end}}
+
+</section>
+{{end}}

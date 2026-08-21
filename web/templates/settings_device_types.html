@@ -1,0 +1,263 @@
+{{define "content"}}
+{{/* 设备类型管理页：编辑模板字段、解析规则以及实时页展示偏好。 */}}
+<header class="settings-device-types-nav subpage-header subpage-toolbar-compact">
+    <div class="subpage-header-top">
+        <a class="subpage-back-button" href="/settings" aria-label="返回系统设置" title="返回系统设置"><span class="subpage-back-icon" aria-hidden="true"><svg class="ui-icon"><use href="#icon-back"></use></svg></span><span>返回系统设置</span></a>
+        <div class="module-tools">
+            {{if .DeviceTemplateState.Available}}
+            {{if .CanManageDeviceTemplates}}<a class="btn btn-small btn-primary" href="/settings/device-types/editor?return_page={{.DeviceTemplatePagination.Page}}">新增自定义设备类型</a>{{end}}
+            {{else}}
+            <span class="status-bad">设备类型不可用</span>
+            {{end}}
+        </div>
+    </div>
+</header>
+
+<section class="settings-device-types-page page-fill">
+        <section class="panel tech-frame settings-card device-template-management">
+            {{if .DeviceTemplateState.ErrorMessage}}
+            <span hidden data-initial-toast data-toast-type="error" data-toast-message="设备类型暂时无法获取：{{.DeviceTemplateState.ErrorMessage}}"></span>
+            <p class="field-hint status-bad">设备类型暂不可用。</p>
+            {{end}}
+
+            <div class="template-stat-grid">
+                <div class="network-status-item">
+                    <span>设备类型总数</span>
+                    <strong>{{.DeviceTemplateManagement.TotalTemplates}}</strong>
+                </div>
+                <div class="network-status-item">
+                    <span>已被引用</span>
+                    <strong>{{.DeviceTemplateManagement.ReferencedTemplates}}</strong>
+                </div>
+                <div class="network-status-item">
+                    <span>未被引用</span>
+                    <strong>{{.DeviceTemplateManagement.UnreferencedTemplates}}</strong>
+                </div>
+            </div>
+
+            {{if .DeviceTemplateManagement.Templates}}
+            <div class="table-shell table-shell-wide template-management-table">
+                <table class="data-table template-management-data-table">
+                    <colgroup>
+                        <col class="template-col-name">
+                        <col class="template-col-register">
+                        <col class="template-col-stride">
+                        <col class="template-col-capability">
+                        <col class="template-col-reference">
+                        <col class="template-col-action">
+                    </colgroup>
+                    <thead>
+                        <tr>
+                            <th>设备类型名称</th>
+                            <th>建议设备基地址</th>
+                            <th>设备地址跨度</th>
+                            <th>操作能力</th>
+                            <th>引用状态</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .DeviceTemplateManagement.Templates}}
+                        <tr>
+                            <td>
+                                <strong class="table-primary">{{defaultText .TemplateName}}</strong>
+                                <span class="table-secondary template-name-note">{{.TemplateID}} · {{if .TemplateKindText}}{{.TemplateKindText}}{{else}}内置{{end}}</span>
+                            </td>
+                            <td>{{.StartRegisterText}}</td>
+                            <td>{{.DeviceAddressStride}} 个寄存器</td>
+                            <td>
+                                <span class="{{.CapabilityClass}}">{{.CapabilityText}}</span>
+                            </td>
+                            <td>
+                                {{if .Referenced}}
+                                <span class="status-ok">已被 {{.ReferenceCount}} 个主站引用</span>
+                                {{else}}
+                                <span class="status-neutral">未被引用</span>
+                                {{end}}
+                                {{if .ReadonlyReason}}<small class="template-readonly-reason setting-help-text">{{.ReadonlyReason}}</small>{{end}}
+                            </td>
+                            <td>
+                                <div class="template-action-group">
+                                <button type="button" class="btn btn-small btn-secondary" data-channel-modal-open="template-detail-modal-{{.TemplateID}}" aria-haspopup="dialog" aria-controls="template-detail-modal-{{.TemplateID}}">查看详情</button>
+                                {{if and $.CanManageDeviceTemplates (not .Builtin)}}
+                                    {{if .Editable}}
+                                    <a class="btn btn-small btn-secondary" href="/settings/device-types/editor?id={{.TemplateID}}&return_page={{$.DeviceTemplatePagination.Page}}">编辑</a>
+                                    {{else}}
+                                    <button type="button" class="btn btn-small btn-secondary" disabled title="{{.ReadonlyReason}}">编辑</button>
+                                    {{end}}
+                                    {{if .Deletable}}
+                                    <button type="button" class="btn btn-small btn-danger" data-template-delete data-template-id="{{.TemplateID}}" data-template-name="{{.TemplateName}}">删除</button>
+                                    {{else}}
+                                    <button type="button" class="btn btn-small btn-danger" disabled title="{{.ReadonlyReason}}">删除</button>
+                                    {{end}}
+                                {{end}}
+                                </div>
+                            </td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+            {{if gt .DeviceTemplatePagination.TotalItems 8}}
+            <nav class="template-pagination" aria-label="设备类型分页">
+                <span class="template-pagination-range">第 {{.DeviceTemplatePagination.RangeStart}}-{{.DeviceTemplatePagination.RangeEnd}} 条，共 {{.DeviceTemplatePagination.TotalItems}} 条</span>
+                <div class="template-pagination-pages">
+                    {{if .DeviceTemplatePagination.HasPrevious}}
+                    <a class="btn btn-small btn-secondary" href="/settings/device-types?template_page={{.DeviceTemplatePagination.Previous}}">上一页</a>
+                    {{else}}
+                    <span class="btn btn-small btn-secondary disabled" aria-disabled="true">上一页</span>
+                    {{end}}
+                    {{range .DeviceTemplatePagination.Pages}}
+                    <a class="btn btn-small {{if eq . $.DeviceTemplatePagination.Page}}btn-primary{{else}}btn-secondary{{end}}" href="/settings/device-types?template_page={{.}}" {{if eq . $.DeviceTemplatePagination.Page}}aria-current="page"{{end}}>{{.}}</a>
+                    {{end}}
+                    {{if .DeviceTemplatePagination.HasNext}}
+                    <a class="btn btn-small btn-secondary" href="/settings/device-types?template_page={{.DeviceTemplatePagination.Next}}">下一页</a>
+                    {{else}}
+                    <span class="btn btn-small btn-secondary disabled" aria-disabled="true">下一页</span>
+                    {{end}}
+                </div>
+            </nav>
+            {{end}}
+            {{range .DeviceTemplateManagement.Templates}}
+            <div class="channel-modal" id="template-detail-modal-{{.TemplateID}}" aria-hidden="true">
+                <div class="channel-modal-backdrop" data-channel-modal-close></div>
+                <div class="channel-modal-dialog tech-frame template-detail-modal" role="dialog" aria-modal="true" aria-labelledby="template-detail-title-{{.TemplateID}}">
+                    <header class="channel-modal-header">
+                        <div>
+                            <span class="topbar-tag">设备类型</span>
+                            <h3 id="template-detail-title-{{.TemplateID}}">{{defaultText .TemplateName}}</h3>
+                            <p>查看设备类型的数据项定义与展示属性。</p>
+                        </div>
+                        <button type="button" class="btn btn-secondary btn-inline modal-close-btn" data-channel-modal-close>关闭</button>
+                    </header>
+                    <div class="channel-modal-body template-detail-modal-body">
+                        <section class="template-detail-section">
+                            <h3>设备类型基本信息</h3>
+                            <dl class="template-detail-grid">
+                                <div><dt>设备类型名称</dt><dd>{{defaultText .TemplateName}}</dd></div>
+                                <div><dt>适用设备</dt><dd>{{.TemplateTypeText}}</dd></div>
+                            </dl>
+                            {{if .Description}}
+                            <div class="template-detail-description">
+                                <strong>设备类型描述</strong>
+                                <p>{{.Description}}</p>
+                            </div>
+                            {{end}}
+                            {{if .ReferencedMasters}}
+                            <div class="referenced-master-list">
+                                <strong>引用主站</strong>
+                                {{range .ReferencedMasters}}
+                                <span>{{if .MasterName}}{{.MasterName}}{{else}}{{.MasterID}}{{end}}</span>
+                                {{end}}
+                            </div>
+                            {{end}}
+                        </section>
+                        <section class="template-detail-section">
+                            <h3>数据项列表</h3>
+                            <p class="field-hint">关键数据、实时展示、历史记录彼此独立；关键数据用于设备摘要、告警候选及 MQTT 实时数据发布。</p>
+                            {{if .Fields}}
+                            <div class="template-field-table">
+                                {{$templateID := .TemplateID}}
+                                <table class="data-table template-data-item-table">
+                                    <colgroup>
+                                        <col class="template-data-col-name">
+                                        <col class="template-data-col-type">
+                                        <col class="template-data-col-unit">
+                                        <col class="template-data-col-number">
+                                        <col class="template-data-col-number">
+                                        <col class="template-data-col-precision">
+                                        <col class="template-data-col-summary">
+                                        <col class="template-data-col-realtime">
+                                        <col class="template-data-col-history">
+                                        <col class="template-data-col-alarm">
+                                        <col class="template-data-col-writable">
+                                        <col class="template-data-col-rule">
+                                    </colgroup>
+                                    <thead>
+                                        <tr>
+                                            <th>数据项名称</th>
+                                            <th>数据类型</th>
+                                            <th>单位</th>
+                                            <th>系数</th>
+                                            <th>偏移量</th>
+                                            <th>精度</th>
+                                            <th>关键数据</th>
+                                            <th>实时展示</th>
+                                            <th>历史记录</th>
+                                            <th>告警能力</th>
+                                            <th>是否可写 / 可操作</th>
+                                            <th>无效规则</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {{range .Fields}}
+                                        <tr>
+                                            <td class="template-data-item-name">
+                                                <strong class="template-field-name" title="{{defaultText .DisplayName}}{{if .Unit}} / {{.Unit}}{{end}}">{{defaultText .DisplayName}}{{if .Unit}} / {{.Unit}}{{end}}</strong>
+                                                <small class="template-field-key" title="{{defaultText .Key}}">点位：{{defaultText .Key}}</small>
+                                                {{if .EnumSummaryText}}<small class="template-field-key" title="{{.EnumSummaryText}}">枚举：{{.EnumSummaryText}}</small>{{end}}
+                                            </td>
+                                            <td class="template-data-item-type"><span title="{{.DataTypeText}}">{{.DataTypeText}}</span></td>
+                                            <td>{{defaultText .Unit}}</td>
+                                            <td>{{.Scale}}</td>
+                                            <td>{{.Offset}}</td>
+                                            <td>{{.Precision}}</td>
+                                            <td><span class="template-data-item-state">{{.SummaryText}}</span></td>
+                                            <td>
+                                                {{if $.CanManageDeviceTemplates}}
+                                                <label class="template-realtime-toggle">
+                                                    <input type="checkbox" {{if .ShowInRealtime}}checked{{end}}
+                                                        data-template-realtime-toggle
+                                                        data-template-id="{{$templateID}}"
+                                                        data-field-key="{{.Key}}">
+                                                    <span data-template-realtime-state>{{if .ShowInRealtime}}显示{{else}}隐藏{{end}}</span>
+                                                </label>
+                                                {{else}}
+                                                <span>{{if .ShowInRealtime}}显示{{else}}隐藏{{end}}</span>
+                                                {{end}}
+                                            </td>
+                                            <td>
+                                                {{if $.CanManageDeviceTemplates}}
+                                                <label class="template-realtime-toggle">
+                                                    <input type="checkbox" {{if .HistoryEnabled}}checked{{end}}
+                                                        data-template-history-toggle
+                                                        data-template-id="{{$templateID}}"
+                                                        data-field-key="{{.Key}}">
+                                                    <span data-template-history-state>{{if .HistoryEnabled}}启用{{else}}停用{{end}}</span>
+                                                </label>
+                                                {{else}}
+                                                <span>{{if .HistoryEnabled}}启用{{else}}停用{{end}}</span>
+                                                {{end}}
+                                            </td>
+                                            <td><span class="template-data-item-state {{.AlarmCapabilityClass}}">{{.AlarmCapabilityText}}</span></td>
+                                            <td><span class="template-data-item-state {{.WritableClass}}">{{.WritableText}}</span></td>
+                                            <td class="template-data-item-rule">
+                                                {{if eq .InvalidRuleType "equal"}}等于 {{.InvalidRuleValue}}
+                                                {{else if eq .InvalidRuleType "greater_or_equal"}}大于等于 {{.InvalidRuleValue}}
+                                                {{else if eq .InvalidRuleType "less_or_equal"}}小于等于 {{.InvalidRuleValue}}
+                                                {{else if eq .InvalidRuleType "inside_range"}}{{.InvalidRuleMin}}～{{.InvalidRuleMax}} 范围内
+                                                {{else}}不启用{{end}}
+                                            </td>
+                                        </tr>
+                                        {{end}}
+                                    </tbody>
+                                </table>
+                            </div>
+                            {{else}}
+                            <p class="table-message table-message-neutral">该设备类型暂未返回数据项详情。</p>
+                            {{end}}
+                        </section>
+                    </div>
+                </div>
+            </div>
+            {{end}}
+            {{else}}
+            <div class="empty-block">
+                <strong>暂无设备类型</strong>
+                <span class="empty-secondary">当前系统未返回可查看的设备类型。</span>
+            </div>
+            {{end}}
+
+        </section>
+</section>
+{{end}}

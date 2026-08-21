@@ -1,0 +1,407 @@
+{{define "content"}}
+{{/* 事件告警中心：历史事件、活动告警和规则管理共享设备点位上下文。 */}}
+<section class="events-page alarm-center-page page-fill page-viewport-root" data-alarm-center data-events-tab="{{.ActiveTab}}">
+    <nav class="alarm-tabs tech-frame" aria-label="事件告警标签页">
+        <a class="alarm-tab {{if eq .ActiveTab "alarms"}}is-active{{end}}" href="/events?tab=alarms">告警管理</a>
+        <a class="alarm-tab {{if eq .ActiveTab "history"}}is-active{{end}}" href="/events?tab=history">历史事件</a>
+    </nav>
+
+    {{if not .ActiveAlarmsState.Available}}
+    <span hidden data-initial-toast data-toast-type="error" data-toast-message="当前告警获取失败：{{defaultText .ActiveAlarmsState.ErrorMessage}}"></span>
+    {{end}}
+    {{if not .EventsState.Available}}
+    <span hidden data-initial-toast data-toast-type="error" data-toast-message="历史事件获取失败：{{defaultText .EventsState.ErrorMessage}}"></span>
+    {{end}}
+    {{if not .AlarmRulesState.Available}}
+    <span hidden data-initial-toast data-toast-type="error" data-toast-message="告警配置获取失败：{{defaultText .AlarmRulesState.ErrorMessage}}"></span>
+    {{end}}
+
+    {{if eq .ActiveTab "alarms"}}
+    <section class="events-stats-grid" data-alarm-live-stats>
+        <article class="events-stat-card events-stat-warning">
+            <div>
+                <span>活动告警</span>
+                <strong data-alarm-live-count="active">{{.ActiveAlarmCount}}</strong>
+            </div>
+        </article>
+        <article class="events-stat-card events-stat-error">
+            <div>
+                <span>未确认告警</span>
+                <strong data-alarm-live-count="unacknowledged">{{.UnacknowledgedAlarmCount}}</strong>
+            </div>
+        </article>
+        <article class="events-stat-card events-stat-total">
+            <div>
+                <span>已启用规则</span>
+                <strong>{{.EnabledRuleCount}}</strong>
+            </div>
+        </article>
+        <article class="events-stat-card events-stat-info">
+            <div>
+                <span>可配置数据项</span>
+                <strong>{{.ConfigurableCount}}</strong>
+            </div>
+        </article>
+    </section>
+
+    <div class="alarm-management-workbench">
+    <section class="events-table-panel alarm-current-panel tech-frame {{if not .ActiveAlarms}}is-empty{{end}}" data-alarm-live-current>
+        <div class="events-section-heading">
+            <h3>当前告警</h3>
+            <p class="alarm-auto-refresh-status section-help hidden" data-alarm-auto-refresh-status></p>
+        </div>
+        {{if .ActiveAlarmPreview}}
+        <div class="alarm-compact-list">
+            {{range .ActiveAlarmPreview}}
+            <article class="alarm-compact-item" data-alarm-key="{{.DeviceID}}::{{.PointKey}}::{{.ActiveSinceMS}}">
+                <header class="alarm-compact-heading">
+                    <span class="event-level-badge {{eventLevelClass .Level}}">{{alarmLevelText .Level}}</span>
+                    <strong class="alarm-compact-device" title="{{defaultText .DeviceName}}">{{defaultText .DeviceName}}</strong>
+                </header>
+                <div class="alarm-compact-main">
+                    <div class="alarm-compact-content">
+                        <strong class="alarm-compact-point" title="{{defaultText .PointName}}">{{defaultText .PointName}}</strong>
+                        <div class="alarm-compact-reading">
+                            <span>当前值</span>
+                            <b data-alarm-current-value>{{formatAlarmValue .CurrentValue .Precision .Unit}}</b>
+                        </div>
+                        <div class="alarm-compact-threshold">
+                            <span>阈值规则</span>
+                            <strong>{{alarmDirectionText .Direction}}：{{formatAlarmValue .ThresholdValue .Precision .Unit}}</strong>
+                        </div>
+                    </div>
+                    <aside class="alarm-compact-side">
+                        {{if .Acknowledged}}
+                        <div class="alarm-acknowledged-status">
+                            <strong>已确认</strong>
+                            <span>确认人：{{defaultText .AcknowledgedBy}}</span>
+                            <span>确认时间：{{formatTimestamp .AcknowledgedAtMS}}</span>
+                        </div>
+                        {{else}}
+                        <span class="alarm-pending-status">未确认</span>
+                        {{if $.CanAckAlarm}}<div class="alarm-acknowledge-actions">
+                            <button type="button" class="btn btn-small" data-alarm-acknowledge
+                                data-device-id="{{.DeviceID}}" data-point-key="{{.PointKey}}"
+                                data-active-since-ms="{{.ActiveSinceMS}}">确认告警</button>
+                        </div>{{end}}
+                        {{end}}
+                    </aside>
+                </div>
+            </article>
+            {{end}}
+        </div>
+        {{if .RemainingAlarmCount}}<div class="alarm-remaining-count">还有 {{.RemainingAlarmCount}} 条告警</div>{{end}}
+        {{else}}
+        <div class="events-empty-state alarm-compact-empty">
+            {{if not .ActiveAlarmsState.Available}}
+            <strong>当前告警暂不可用</strong>
+            <span>{{defaultText .ActiveAlarmsState.ErrorMessage}}</span>
+            {{else}}
+            <strong>当前暂无报警设备</strong>
+            <span class="empty-secondary">系统未检测到需要立即处理的告警。</span>
+            {{end}}
+        </div>
+        {{end}}
+    </section>
+    {{end}}
+
+    {{if eq .ActiveTab "history"}}
+    <section class="events-stats-grid events-history-stats" aria-label="按事件级别筛选">
+        <a class="events-stat-card events-stat-total {{if eq .LevelFilter "all"}}is-active{{end}}" href="{{.AllEventsURL}}" {{if eq .LevelFilter "all"}}aria-current="true"{{end}}>
+            <div>
+                <span>事件总数</span>
+                <strong>{{.TotalEventCount}}</strong>
+            </div>
+        </a>
+        <a class="events-stat-card events-stat-error {{if eq .LevelFilter "error"}}is-active{{end}}" href="{{.ErrorEventsURL}}" {{if eq .LevelFilter "error"}}aria-current="true"{{end}}>
+            <div>
+                <span>错误</span>
+                <strong>{{.ErrorCount}}</strong>
+            </div>
+        </a>
+        <a class="events-stat-card events-stat-warning {{if eq .LevelFilter "warning"}}is-active{{end}}" href="{{.WarningEventsURL}}" {{if eq .LevelFilter "warning"}}aria-current="true"{{end}}>
+            <div>
+                <span>告警</span>
+                <strong>{{.WarningCount}}</strong>
+            </div>
+        </a>
+        <a class="events-stat-card events-stat-info {{if eq .LevelFilter "info"}}is-active{{end}}" href="{{.InfoEventsURL}}" {{if eq .LevelFilter "info"}}aria-current="true"{{end}}>
+            <div>
+                <span>信息</span>
+                <strong>{{.InfoCount}}</strong>
+            </div>
+        </a>
+    </section>
+
+    <section class="events-toolbar tech-frame">
+        <form method="get" action="/events" class="events-search-form" role="search">
+            <input type="hidden" name="tab" value="history">
+            <input type="hidden" name="level" value="{{.LevelFilter}}">
+            <label class="events-search-field">
+                <span>搜索</span>
+                <input type="search" name="q" data-keyboard="text" value="{{.SearchQuery}}" placeholder="搜索事件摘要 / 对象，按 Enter 搜索">
+            </label>
+            <input type="hidden" name="page_size" value="{{.PageSize}}">
+        </form>
+        {{if .CanManageDataMaintenance}}<form method="post" action="/actions/events/clear" data-clear-events-form class="events-clear-form">
+            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+            <input type="hidden" name="redirect" value="/events?tab=history">
+            <button type="submit" class="btn btn-danger btn-small">清除历史事件记录</button>
+        </form>{{end}}
+    </section>
+
+    <section class="events-table-panel tech-frame {{if not .Events}}is-empty{{end}}">
+        <div class="events-section-heading">
+            <h3>历史事件记录</h3>
+        </div>
+        {{if .Events}}
+        <div class="table-shell events-table-shell">
+            <table class="data-table monitor-table events-table">
+                <colgroup>
+                    <col class="events-col-time">
+                    <col class="events-col-level">
+                    <col class="events-col-source">
+                    <col class="events-col-target">
+                    <col class="events-col-summary">
+                </colgroup>
+                <thead>
+                    <tr>
+                        <th>时间</th>
+                        <th>级别</th>
+                        <th>来源</th>
+                        <th>对象</th>
+                        <th>事件摘要</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {{range .Events}}
+                    <tr>
+                        <td class="events-time-cell">{{formatTimestamp .TimestampMS}}</td>
+                        <td><span class="event-level-badge {{eventLevelClass .Level}}">{{eventLevelText .Level}}</span></td>
+                        <td class="events-source-cell">{{eventTypeText .}}</td>
+                        <td class="events-target-cell" title="{{eventTargetText .}}">{{eventTargetText .}}</td>
+                        <td class="events-summary-cell">
+                            <span class="table-message table-message-strong text-clamp-2" title="{{eventSummaryText .}}" aria-label="{{eventSummaryText .}}" tabindex="0">{{eventSummaryText .}}</span>
+                            {{if eventRepeatText .OccurrenceCount}}<span class="alarm-repeat-badge">{{eventRepeatText .OccurrenceCount}}</span>{{end}}
+                        </td>
+                    </tr>
+                {{end}}
+                </tbody>
+            </table>
+        </div>
+        {{else}}
+        <div class="events-empty-state">
+            {{if not .EventsState.Available}}
+            <strong>历史事件暂不可用</strong>
+            <span>{{defaultText .EventsState.ErrorMessage}}</span>
+            {{else}}
+            <strong>{{if .HasAnyEvents}}筛选条件下暂无匹配事件{{else}}暂无历史事件记录{{end}}</strong>
+            {{if .HasAnyEvents}}<span class="empty-secondary">可切换顶部级别卡片，或调整搜索关键词后重试。</span>{{end}}
+            {{end}}
+        </div>
+        {{end}}
+
+        <div class="events-table-footer">
+            <div class="events-table-count">
+                {{if .FilteredEventCount}}
+                共 {{.FilteredEventCount}} 条事件，当前显示 {{.PageStart}}-{{.PageEnd}}，按时间倒序显示
+                {{else}}
+                共 0 条事件，按时间倒序显示
+                {{end}}
+            </div>
+            <form method="get" action="/events" class="events-pagination">
+                <input type="hidden" name="tab" value="history">
+                <input type="hidden" name="level" value="{{.LevelFilter}}">
+                <input type="hidden" name="q" value="{{.SearchQuery}}">
+                <button type="submit" name="page" value="{{.PrevPage}}" class="btn btn-small" aria-label="上一页" title="上一页" {{if not .HasPrevPage}}disabled{{end}}><svg class="ui-icon ui-icon-sm" aria-hidden="true"><use href="#icon-back"></use></svg></button>
+                <span class="events-page-indicator">{{.Page}} / {{.TotalPages}}</span>
+                <button type="submit" name="page" value="{{.NextPage}}" class="btn btn-small" aria-label="下一页" title="下一页" {{if not .HasNextPage}}disabled{{end}}><svg class="ui-icon ui-icon-sm" aria-hidden="true"><use href="#icon-forward"></use></svg></button>
+                <select name="page_size" onchange="this.form.submit()">
+                    {{range .PageSizeOptions}}
+                    <option value="{{.}}" {{if eq $.PageSize .}}selected{{end}}>{{.}} 条/页</option>
+                    {{end}}
+                </select>
+            </form>
+        </div>
+    </section>
+    {{end}}
+
+    {{if eq .ActiveTab "alarms"}}
+    <section class="events-table-panel alarm-rules-panel tech-frame {{if not .AlarmRuleItems}}is-empty{{end}}">
+        <div class="events-section-heading">
+            <h3>告警规则配置</h3>
+            <p class="section-help">按主站和数据项配置上下限告警规则</p>
+        </div>
+        {{if .AlarmRuleItems}}
+        <div class="table-shell events-table-shell">
+            <table class="data-table monitor-table events-table alarm-rules-table">
+                <colgroup>
+                    <col class="alarm-col-object"><col class="alarm-col-point"><col class="alarm-col-threshold">
+                    <col class="alarm-col-state"><col class="alarm-col-count"><col class="alarm-col-action">
+                </colgroup>
+                <thead>
+                    <tr>
+                        <th>规则对象</th>
+                        <th>数据项</th>
+                        <th>阈值</th>
+                        <th>状态</th>
+                        <th>触发 / 恢复</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {{range .AlarmRuleItems}}
+                    <tr>
+                        <td>
+                            <span class="table-message table-message-strong">{{.MasterName}}</span>
+                            <span class="table-message-note">{{.TemplateName}}</span>
+                        </td>
+                        <td>
+                            <span class="table-message table-message-strong">{{.PointName}}</span>
+                            <span class="table-message-note" title="{{.CoveredDeviceNames}}">{{defaultText .Unit}} · {{.CoverageText}}</span>
+                        </td>
+                        <td>
+                            <span class="table-message table-message-strong">{{.LimitTypeText}}</span>
+                            <span class="table-message-note">上限 {{.HighText}} · 下限 {{.LowText}}</span>
+                        </td>
+                        <td>
+                            <span class="table-message table-message-strong">{{.StatusText}}</span>
+                            <span class="table-message-note">{{.LevelText}}</span>
+                        </td>
+                        <td>
+                            <span class="table-message table-message-strong">触发 {{.TriggerText}}</span>
+                            <span class="table-message-note">恢复 {{.RecoveryText}}</span>
+                        </td>
+                        <td class="alarm-rule-actions">
+                            {{if $.CanManageAlarmRules}}
+                            {{if .MasterID}}
+                            <button type="button" class="btn btn-small" data-alarm-edit
+                                data-master-id="{{.MasterID}}"
+                                data-point-key="{{.PointKey}}"
+                                data-master-name="{{.MasterName}}"
+                                data-point-name="{{.PointName}}"
+                                data-unit="{{.Unit}}"
+                                data-coverage="{{.CoverageText}}"
+                                data-enabled="{{.Rule.Enabled}}"
+                                data-high-enabled="{{.Rule.HighEnabled}}"
+                                data-high-threshold="{{.Rule.HighThreshold}}"
+                                data-low-enabled="{{.Rule.LowEnabled}}"
+                                data-low-threshold="{{.Rule.LowThreshold}}"
+                                data-level="{{.Rule.Level}}"
+                                data-hysteresis="{{.Rule.Hysteresis}}"
+                                data-trigger-count="{{.Rule.TriggerCount}}"
+                                data-recovery-count="{{.Rule.RecoveryCount}}">编辑规则</button>
+                            {{else}}
+                            <span class="table-message-note">主站 ID 缺失</span>
+                            {{end}}
+                            {{else}}
+                            <span class="table-message-note">仅可查看</span>
+                            {{end}}
+                        </td>
+                    </tr>
+                {{end}}
+                </tbody>
+            </table>
+        </div>
+        {{else}}
+        <div class="events-empty-state">
+            {{if not .AlarmRulesState.Available}}
+            <strong>告警配置暂不可用</strong>
+            <span>{{defaultText .AlarmRulesState.ErrorMessage}}</span>
+            {{else}}
+            <strong>暂无可配置数据项</strong>
+            <span class="empty-secondary">{{.AlarmRulesEmptyText}}</span>
+            {{end}}
+        </div>
+        {{end}}
+    </section>
+    {{if .CanManageAlarmRules}}
+    <div class="alarm-modal-backdrop" data-alarm-modal hidden>
+        <div class="alarm-modal-dialog tech-frame" role="dialog" aria-modal="true" aria-labelledby="alarm-modal-title">
+            <div class="alarm-modal-header">
+                <h3 id="alarm-modal-title" data-alarm-modal-title>编辑告警规则</h3>
+                <button type="button" class="modal-icon-button" data-alarm-modal-close aria-label="关闭"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
+            </div>
+            <form method="post" action="/actions/alarms/rules/save" class="alarm-rule-form alarm-rule-modal-form" data-alarm-rule-form>
+                <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                <input type="hidden" name="redirect" value="/events?tab=alarms">
+                <div class="alarm-rule-modal-scroll">
+                <div class="alarm-config-target">
+                    <div><span>主站</span><strong data-alarm-target-master>—</strong></div>
+                    <div><span>数据项</span><strong data-alarm-target-point>—</strong></div>
+                    <div><span>单位</span><strong data-alarm-target-unit>—</strong></div>
+                    <div><span>覆盖范围</span><strong data-alarm-target-coverage>—</strong></div>
+                </div>
+                <label class="alarm-hidden-select">
+                    <span>主站</span>
+                    <select name="master_id" data-alarm-master-select required>
+                        {{range .AlarmRuleDevices}}
+                        {{if .MasterID}}
+                        <option value="{{.MasterID}}">{{.MasterName}}</option>
+                        {{end}}
+                        {{end}}
+                    </select>
+                </label>
+                <label class="alarm-hidden-select">
+                    <span>数据项</span>
+                    <select name="point_key" data-alarm-point-select required>
+                        {{range .AlarmRuleDevices}}{{range .Points}}
+                        {{if .MasterID}}
+                        <option value="{{.PointKey}}" data-master-id="{{.MasterID}}" data-unit="{{.Unit}}" data-precision="{{.Precision}}">{{.PointName}}</option>
+                        {{end}}
+                        {{end}}{{end}}
+                    </select>
+                </label>
+                <input type="hidden" name="enabled" value="on" data-alarm-enabled>
+                <input type="hidden" name="high_enabled" data-alarm-high-enabled>
+                <input type="hidden" name="low_enabled" data-alarm-low-enabled>
+                <fieldset class="alarm-limit-type" data-alarm-limit-type>
+                    <legend>限值类型</legend>
+                    <label><input type="radio" name="limit_type" value="off"><span>不启用</span></label>
+                    <label><input type="radio" name="limit_type" value="high"><span>仅上限</span></label>
+                    <label><input type="radio" name="limit_type" value="low"><span>仅下限</span></label>
+                    <label><input type="radio" name="limit_type" value="both"><span>上下限</span></label>
+                </fieldset>
+                <label>
+                    <span>上限值</span>
+                    <span class="alarm-value-input"><input type="number" step="any" name="high_threshold" data-alarm-high-threshold placeholder="例如 80"><em data-alarm-unit>—</em></span>
+                </label>
+                <label>
+                    <span>下限值</span>
+                    <span class="alarm-value-input"><input type="number" step="any" name="low_threshold" data-alarm-low-threshold placeholder="例如 0"><em data-alarm-unit>—</em></span>
+                </label>
+                <label>
+                    <span>告警级别</span>
+                    <select name="level" data-alarm-level>
+                        <option value="warning">告警</option>
+                        <option value="error">严重</option>
+                    </select>
+                </label>
+                <label>
+                    <span>回差</span>
+                    <input type="number" step="any" min="0" name="hysteresis" data-alarm-hysteresis value="0">
+                </label>
+                <label>
+                    <span>连续触发次数</span>
+                    <input type="number" min="1" max="100" step="1" name="trigger_count" data-alarm-trigger-count value="1">
+                    <small class="field-hint">连续达到触发次数后生成告警事件。</small>
+                </label>
+                <label>
+                    <span>连续恢复次数</span>
+                    <input type="number" min="1" max="100" step="1" name="recovery_count" data-alarm-recovery-count value="1">
+                    <small class="field-hint">连续恢复到正常范围后生成恢复事件。</small>
+                </label>
+                </div>
+                <div class="alarm-form-actions">
+                    <button type="submit" class="btn btn-small">保存并应用规则</button>
+                    <button type="button" class="btn btn-small btn-secondary" data-alarm-modal-close>取消</button>
+                    <span class="alarm-form-error" data-alarm-form-error></span>
+                </div>
+            </form>
+        </div>
+    </div>
+    {{end}}
+    </div>
+    {{end}}
+</section>
+{{end}}

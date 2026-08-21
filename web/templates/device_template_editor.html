@@ -1,0 +1,130 @@
+{{define "content"}}
+<header class="subpage-header subpage-toolbar-compact">
+    <div class="subpage-header-top">
+        <a class="subpage-back-button" href="{{.ReturnPath}}" data-template-editor-back aria-label="返回设备类型管理"><span class="subpage-back-icon" aria-hidden="true"><svg class="ui-icon"><use href="#icon-back"></use></svg></span><span>返回设备类型管理</span></a>
+        <span class="topbar-tag">三级配置页</span>
+    </div>
+</header>
+
+<main class="device-template-editor-page page-fill" data-template-editor-page data-template-editing="{{if .Editing}}true{{else}}false{{end}}" data-template-return-path="{{.ReturnPath}}" data-template-initial-json="{{jsonAttr .Definition}}">
+    <section class="panel tech-frame template-editor-page-card">
+        <nav class="template-step-tabs" aria-label="设备类型配置步骤">
+            <button type="button" class="template-step-tab is-active" data-template-step-target="1" aria-current="step"><span>1</span><strong>基础信息与读取区块</strong></button>
+            <button type="button" class="template-step-tab" data-template-step-target="2"><span>2</span><strong>数据项与实时展示</strong></button>
+        </nav>
+
+        <form class="settings-form template-editor-form template-editor-page-form" data-template-editor-form novalidate>
+            <section class="template-step-panel" data-template-step-panel="1">
+                <section class="template-editor-section template-basic-section" aria-labelledby="template-basic-title">
+                    <div class="template-section-head"><div><h3 id="template-basic-title">基础信息</h3><p>设置稳定标识、主站默认地址和相邻设备间隔。</p></div></div>
+                    <div class="template-base-grid">
+                        <div class="template-base-row">
+                            <label class="form-field"><span class="field-label">模板 ID</span><input name="id" required maxlength="64" pattern="[a-z0-9_-]+" placeholder="例如：temperature_sensor"><small class="field-hint">用于系统内部识别，创建后不可修改。</small></label>
+                            <label class="form-field"><span class="field-label">设备类型名称</span><input name="display_name" data-keyboard="text-cn" required maxlength="100" placeholder="例如：温湿度传感器"><small class="field-hint field-hint-placeholder" aria-hidden="true">占位</small></label>
+                        </div>
+                        <div class="template-base-row">
+                            <label class="form-field"><span class="field-label">建议设备基地址</span><input name="default_start_register" required type="number" min="0" max="65535" value="0"><small class="field-hint">新建主站时作为首台设备基地址的建议值。</small></label>
+                            <label class="form-field"><span class="field-label">设备地址跨度</span><input name="device_address_stride" required type="number" min="1" max="65536" value="1"><small class="field-hint" data-template-stride-hint>相邻两台设备基地址之间的寄存器间隔。当前最小允许值：1。</small></label>
+                        </div>
+                        <label class="form-field template-description-field"><span class="field-label">描述</span><textarea name="description" rows="3" maxlength="500" placeholder="简要说明设备协议和数据项含义"></textarea></label>
+                    </div>
+                </section>
+
+                <section class="template-editor-section template-read-block-section" aria-labelledby="template-read-block-title">
+                    <div class="template-section-head"><div><h3 id="template-read-block-title">读取区块</h3><p>配置设备内连续读取范围；相同功能码的区块不能重叠。</p></div><button type="button" class="btn btn-small btn-secondary" data-template-block-add>添加读取区块</button></div>
+                    <div class="template-read-blocks-table" role="table" aria-label="读取区块列表">
+                        <div class="template-read-blocks-table-head" role="row"><span>区块名称</span><span>功能码</span><span>偏移范围</span><span>字段数量</span><span>操作</span></div>
+                        <div class="template-read-blocks-table-body" role="rowgroup" data-template-read-blocks></div>
+                    </div>
+                </section>
+
+                <section class="channel-modal template-config-modal template-read-block-modal" data-template-block-panel aria-hidden="true">
+                    <div class="channel-modal-backdrop" data-template-block-cancel></div>
+                    <div class="channel-modal-dialog tech-frame" role="dialog" aria-modal="true" aria-labelledby="device-template-block-title">
+                        <header class="channel-modal-header"><div><h3 id="device-template-block-title" data-template-block-editor-title>添加读取区块</h3><p>区块地址相对于单台设备基地址。</p></div><button type="button" class="btn btn-secondary btn-inline modal-close-btn" data-template-block-cancel>关闭</button></header>
+                        <div class="settings-form template-field-form template-modal-form-shell" data-template-block-form>
+                            <div class="channel-modal-body modal-form-scroll">
+                                <div class="template-field-form-grid">
+                                    <label class="form-field"><span class="field-label">区块名称</span><input name="block_display_name" data-keyboard="text-cn" required maxlength="100"></label>
+                                    <label class="form-field"><span class="field-label">区块功能码</span><select name="block_function_code" required><option value="3">FC03（读保持寄存器）</option><option value="4">FC04（读输入寄存器）</option></select></label>
+                                    <label class="form-field"><span class="field-label">区块起始偏移</span><input name="block_start_offset" required type="number" min="0" max="65535" value="0"></label>
+                                    <label class="form-field"><span class="field-label">区块寄存器数量</span><input name="read_block_quantity" required type="number" min="1" max="125" value="1"></label>
+                                </div>
+                                <p class="template-field-range-note" data-template-block-range aria-live="polite"></p>
+                            </div>
+                            <footer class="template-modal-footer"><p class="form-feedback" data-template-block-feedback aria-live="polite"></p><div class="modal-action-group"><button type="button" class="btn btn-secondary" data-template-block-cancel>取消</button><button type="button" class="btn btn-primary" data-template-block-save>保存读取区块</button></div></footer>
+                        </div>
+                    </div>
+                </section>
+            </section>
+
+            <section class="template-step-panel" data-template-step-panel="2" hidden>
+                <section class="template-editor-section template-realtime-grouping-section">
+                    <div class="template-section-head"><div><h3>实时展示分组</h3><p>开启后，可创建自定义分组，并将实时展示数据项分配到不同分组中。</p></div><label class="template-switch"><input name="realtime_grouping_enabled" type="checkbox" data-template-grouping-toggle><span class="template-switch-track" aria-hidden="true"></span><span>启用分组</span></label></div>
+                    <div class="template-group-manager" data-template-group-manager hidden>
+                        <div class="template-group-manager-head"><div><strong>实时展示分组管理</strong><small>分组按此顺序在实时监控中从左向右排列。</small></div><button type="button" class="btn btn-small btn-secondary" data-template-group-add>新增分组</button></div>
+                        <div class="template-group-list" data-template-group-list></div>
+                        <div class="template-groups-empty" data-template-groups-empty><span>尚未创建分组。</span></div>
+                    </div>
+                </section>
+
+                <section class="template-editor-section template-data-section" aria-labelledby="template-data-title">
+                    <div class="template-section-head"><div><h3 id="template-data-title">数据项配置</h3><p>关键数据、实时展示、历史记录彼此独立；关键数据用于设备摘要、告警候选及 MQTT 实时数据发布。</p></div><button type="button" class="btn btn-small btn-secondary" data-template-field-add>添加数据项</button></div>
+                    <div class="template-fields-table template-fields-table-wide" role="table" aria-label="数据项列表">
+                        <div class="template-fields-table-head" role="row"><span>数据项</span><span>读取区块</span><span>单位</span><span>区块内偏移</span><span>数据类型 / 排列</span><span>状态 / 分组 / 无效规则</span><span>操作</span></div>
+                        <div class="template-fields-table-body" role="rowgroup" data-template-fields></div>
+                    </div>
+                    <div class="template-fields-empty" data-template-fields-empty><strong>尚未添加数据项</strong><span class="empty-secondary">点击“添加数据项”配置第一个采集字段。</span></div>
+                </section>
+
+                <section class="channel-modal template-config-modal template-data-item-modal" data-template-field-panel aria-hidden="true">
+                    <div class="channel-modal-backdrop" data-template-field-cancel></div>
+                    <div class="channel-modal-dialog tech-frame" role="dialog" aria-modal="true" aria-labelledby="device-template-field-title">
+                        <header class="channel-modal-header"><div><h3 id="device-template-field-title" data-template-field-editor-title>添加数据项</h3><p>配置数据解析、关键数据、实时展示、历史记录和字段级规则。</p></div><button type="button" class="btn btn-secondary btn-inline modal-close-btn" data-template-field-cancel>关闭</button></header>
+                        <div class="settings-form template-field-form template-modal-form-shell" data-template-field-form>
+                            <div class="channel-modal-body modal-form-scroll">
+                                <div class="template-field-form-grid template-field-form-grid-wide">
+                            <label class="form-field"><span class="field-label">字段名称</span><input name="field_display_name" data-keyboard="text-cn" required maxlength="100"></label>
+                            <label class="form-field"><span class="field-label">字段标识（key）</span><input name="key" required maxlength="64" pattern="[a-z0-9_-]+"></label>
+                            <label class="form-field" data-template-field-block-field><span class="field-label">所属读取区块</span><select name="field_read_block" required></select></label>
+                            <label class="form-field"><span class="field-label">数据类型</span><select name="data_type"><option value="uint16">无符号 16 位（uint16）</option><option value="int16">有符号 16 位（int16）</option><option value="uint32">无符号 32 位（uint32）</option><option value="int32">有符号 32 位（int32）</option><option value="float32">32 位浮点数（float32）</option><option value="high_uint8">高 8 位</option><option value="low_uint8">低 8 位</option><option value="bool">状态位（单比特）</option></select></label>
+                            <label class="form-field"><span class="field-label">寄存器偏移</span><input name="register_offset" required type="number" min="0" max="124" value="0"></label>
+                            <label class="form-field" data-template-bit-index hidden><span class="field-label">位索引</span><select name="bit_index"><option value="0">bit0</option><option value="1">bit1</option><option value="2">bit2</option><option value="3">bit3</option><option value="4">bit4</option><option value="5">bit5</option><option value="6">bit6</option><option value="7">bit7</option><option value="8">bit8</option><option value="9">bit9</option><option value="10">bit10</option><option value="11">bit11</option><option value="12">bit12</option><option value="13">bit13</option><option value="14">bit14</option><option value="15">bit15</option></select></label>
+                            <label class="form-field" data-template-data-order hidden><span class="field-label">32 位数据排列</span><select name="data_order"><option value="ABCD">ABCD（标准大端）</option><option value="BADC">BADC（字节交换）</option><option value="CDAB">CDAB（字交换）</option><option value="DCBA">DCBA（字节和字均交换）</option></select></label>
+                            <label class="form-field" data-template-numeric-transform><span class="field-label">比例系数</span><input name="scale" required type="number" step="any" value="1"></label>
+                            <label class="form-field" data-template-numeric-transform><span class="field-label">数值偏移</span><input name="offset" required type="number" step="any" value="0"></label>
+                            <label class="form-field"><span class="field-label">单位</span><input name="unit" maxlength="20"></label>
+                            <label class="form-field" data-template-numeric-transform><span class="field-label">小数位数</span><input name="precision" required type="number" min="0" max="6" value="0"></label>
+                            <label class="form-field" data-template-realtime-group-field hidden><span class="field-label">实时展示分组</span><select name="realtime_group_id"></select><small class="field-hint">仅启用实时展示的数据项需要选择。</small></label>
+                                </div>
+                                <p class="template-field-range-note" data-template-field-range aria-live="polite"></p>
+                                <div class="template-field-options">
+                            <label class="template-switch"><input name="summary" type="checkbox"><span class="template-switch-track"></span><span>关键数据</span></label>
+                            <label class="template-switch"><input name="show_in_realtime" type="checkbox"><span class="template-switch-track"></span><span>实时展示</span></label>
+                            <label class="template-switch"><input name="history_enabled" type="checkbox"><span class="template-switch-track"></span><span>历史记录</span></label>
+                                </div>
+                                <details class="template-advanced-settings"><summary>高级设置 · 无效规则与枚举显示</summary>
+                            <div class="template-advanced-grid">
+                                <label class="form-field"><span class="field-label">无效规则</span><select name="invalid_rule_type"><option value="none">不启用</option><option value="equal">原始值等于指定值</option><option value="greater_or_equal">原始值大于等于指定值</option><option value="less_or_equal">原始值小于等于指定值</option><option value="inside_range">原始值位于指定范围内</option></select></label>
+                                <label class="form-field" data-template-invalid-value-field hidden><span class="field-label">规则值</span><input name="invalid_rule_value" type="number" step="any" value="0"></label>
+                                <label class="form-field" data-template-invalid-min-field hidden><span class="field-label">范围最小值</span><input name="invalid_rule_min" type="number" step="any" value="0"></label>
+                                <label class="form-field" data-template-invalid-max-field hidden><span class="field-label">范围最大值</span><input name="invalid_rule_max" type="number" step="any" value="0"></label>
+                                <div class="template-invalid-rule-shortcut" data-template-uint16-invalid-shortcut hidden><button type="button" class="btn btn-small btn-secondary" data-template-invalid-uint16-shortcut>快捷设置 ≥ 65520</button></div>
+                            </div>
+                            <div class="template-enum-settings" data-template-enum-settings><label class="template-switch"><input name="enum_enabled" type="checkbox"><span class="template-switch-track"></span><span>枚举显示</span></label><small class="field-hint" data-template-enum-hint></small><div class="template-enum-editor" data-template-enum-editor hidden><div class="template-enum-head"><span>数值</span><span>显示文字</span><span>排序 / 删除</span></div><div data-template-enum-items></div><button type="button" class="btn btn-small btn-secondary" data-template-enum-add>新增枚举项</button></div></div>
+                                </details>
+                            </div>
+                            <footer class="template-modal-footer"><p class="form-feedback" data-template-field-feedback aria-live="polite"></p><div class="modal-action-group"><button type="button" class="btn btn-secondary" data-template-field-cancel>取消</button><button type="button" class="btn btn-primary" data-template-field-save>保存数据项</button></div></footer>
+                        </div>
+                    </div>
+                </section>
+            </section>
+
+            <footer class="template-editor-page-footer">
+                <p class="form-feedback" data-template-editor-feedback aria-live="polite"></p>
+                <div class="template-editor-page-actions"><button type="button" class="btn btn-secondary" data-template-step-previous hidden>上一步</button><button type="button" class="btn btn-secondary" data-template-step-next>下一步</button><button type="submit" class="btn btn-primary" data-template-editor-submit hidden>{{if .Editing}}保存修改{{else}}创建设备类型{{end}}</button></div>
+            </footer>
+        </form>
+    </section>
+</main>
+{{end}}

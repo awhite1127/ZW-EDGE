@@ -1,0 +1,122 @@
+{{define "content"}}
+{{/* 登录页同时承载普通凭据登录与受后端状态约束的首次部署入口。 */}}
+{{if .Flash}}
+<div class="login-toast-region" aria-live="polite" aria-atomic="true">
+    <section class="login-toast login-toast-{{.Flash.Type}}" role="status">
+        <span class="login-toast-indicator" aria-hidden="true"></span>
+        <span>{{.Flash.Text}}</span>
+    </section>
+</div>
+{{end}}
+<section class="login-hero" aria-labelledby="login-system-title">
+    <div class="login-brand">
+        <div class="login-brand-content">
+            <header class="login-brand-header">
+                <div class="login-logo-slot">
+                    <img src="/static/company-logo.png" alt="珠海知更电气有限公司 LOGO" width="127" height="126">
+                    <span class="login-logo-copy">
+                        <strong>珠海知更电气有限公司</strong>
+                        <small>ZHIGENG ELECTRIC</small>
+                    </span>
+                </div>
+            </header>
+
+            <div class="login-brand-copy">
+                <p class="login-kicker"><span></span>工业现场控制系统入口</p>
+                <h1 id="login-system-title">边缘计算控制器<br>管理系统</h1>
+                <p class="login-lead">面向工业现场采集、设备监测、历史趋势与系统运维的边缘控制平台</p>
+            </div>
+
+        </div>
+
+        <div class="login-industry-scene" aria-hidden="true">
+            <svg viewBox="0 0 1000 330" preserveAspectRatio="xMidYMax slice" focusable="false">
+                <g class="scene-grid-lines">
+                    <path d="M0 58H1000M0 128H1000M0 198H1000M0 268H1000"></path>
+                    <path d="M90 0V330M230 0V330M370 0V330M510 0V330M650 0V330M790 0V330M930 0V330"></path>
+                </g>
+                <g class="scene-data-line">
+                    <path d="M15 104H155L190 68H330L365 119H520L556 78H720L758 111H985"></path>
+                    <circle cx="190" cy="68" r="5"></circle>
+                    <circle cx="556" cy="78" r="5"></circle>
+                    <circle cx="758" cy="111" r="5"></circle>
+                </g>
+                <g class="scene-factory-fill">
+                    <path d="M0 287H78V239H103V287H124V204H147V287H185V229H265V287H298V178H344V287H377V224H395V287H430V151H444V287H462V188H478V287H518V234H610V287H633V197H700V287H725V246H782V287H821V212H844V287H884V166H902V287H930V226H1000V330H0Z"></path>
+                    <path d="M86 239V218H95V239M311 178V155H331V178M646 197V180H687V197M827 212V190H838V212M889 166V128H897V166"></path>
+                    <path d="M188 229Q225 191 262 229M521 234Q564 192 607 234M728 246Q755 218 780 246"></path>
+                </g>
+                <g class="scene-factory-line">
+                    <path d="M0 287H1000M76 239H105M124 204H147M185 229H265M298 178H344M377 224H395M430 151H444M462 188H478M518 234H610M633 197H700M725 246H782M821 212H844M884 166H902M930 226H1000"></path>
+                    <path d="M205 228V287M244 228V287M539 230V287M589 230V287M740 243V287M771 243V287"></path>
+                    <path d="M147 250H185M265 250H298M344 238H377M395 238H430M478 252H518M610 252H633M700 257H725M782 257H821M844 248H884M902 248H930"></path>
+                </g>
+            </svg>
+        </div>
+    </div>
+
+    <aside class="login-card-shell tech-frame" aria-labelledby="login-card-title">
+        <svg class="login-control-diagram" viewBox="0 0 450 720" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+            <g class="login-control-grid">
+                <path d="M36 70H414M36 180H414M36 290H414M36 400H414M36 510H414M36 620H414"></path>
+                <path d="M78 32V688M188 32V688M298 32V688M408 32V688"></path>
+            </g>
+            <g class="login-control-lines">
+                <path d="M42 122H120V208H232V154H330V244H410"></path>
+                <path d="M42 514H128V446H228V566H322V482H410"></path>
+                <path d="M92 344H174M276 344H358"></path>
+                <circle cx="120" cy="208" r="6"></circle>
+                <circle cx="232" cy="154" r="6"></circle>
+                <circle cx="330" cy="244" r="6"></circle>
+                <circle cx="128" cy="446" r="6"></circle>
+                <circle cx="228" cy="566" r="6"></circle>
+                <circle cx="322" cy="482" r="6"></circle>
+                <rect x="174" y="320" width="102" height="48" rx="5"></rect>
+            </g>
+        </svg>
+        <div class="login-card-head">
+            <h2 id="login-card-title">账户登录</h2>
+        </div>
+
+        {{if .ErrorMessage}}
+        <section class="flash flash-error" role="alert">
+            {{.ErrorMessage}}
+        </section>
+        {{end}}
+
+        <form class="login-form" method="post" action="/login">
+            <input type="hidden" name="redirect" value="{{.Redirect}}">
+            <label class="form-field">
+                <span class="field-label">账号</span>
+                <span class="login-input-shell">
+                    <svg class="ui-icon" aria-hidden="true"><use href="#icon-user"></use></svg>
+                    <input name="username" type="text" autocomplete="username" placeholder="请输入登录账号" required autofocus>
+                </span>
+            </label>
+            <label class="form-field">
+                <span class="field-label">密码</span>
+                <span class="login-input-shell">
+                    <svg class="ui-icon" aria-hidden="true"><use href="#icon-lock"></use></svg>
+                    <input name="password" type="password" data-keyboard="password" autocomplete="current-password" placeholder="请输入登录密码" required>
+                </span>
+            </label>
+            <button class="btn btn-primary login-submit" type="submit">
+                <span>进入管理系统</span>
+                <svg class="ui-icon" aria-hidden="true"><use href="#icon-forward"></use></svg>
+            </button>
+        </form>
+
+        {{if .FirstBootAdminEntryAvailable}}
+        <div class="login-initial-setup">
+            <div class="login-initial-setup-divider"><span>首次部署</span></div>
+            <form method="post" action="/login/initial-setup">
+                <input type="hidden" name="redirect" value="{{.Redirect}}">
+                <button class="btn btn-secondary login-initial-setup-button" type="submit">首次部署进入系统</button>
+            </form>
+            <p>初始化完成后自动关闭。</p>
+        </div>
+        {{end}}
+
+    </aside>
+</section>
+{{end}}

@@ -1,0 +1,298 @@
+{{define "layout"}}
+{{/* 全站页面骨架：集中注入导航、身份信息、CSRF 元数据和公共静态资源。 */}}
+<!DOCTYPE html>
+<html lang="zh-CN" class="motion-enabled">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#0b141d">
+    <title>{{.Title}} - edge-controller</title>
+    {{if .CSRFToken}}<meta name="csrf-token" content="{{.CSRFToken}}">{{end}}
+    <link rel="stylesheet" href="/static/app.css?v={{staticAssetVersion}}">
+</head>
+<body class="{{if eq .ActiveNav "login"}}login-body{{end}}" data-page-key="{{.ActiveNav}}" data-current-path="{{.CurrentPath}}" data-password-change-recommended="{{.PasswordChangeRecommended}}">
+    {{/* 统一线性图标符号集：单页内复用，不依赖字体、CDN 或额外网络资源。 */}}
+    <svg class="ui-icon-sprite" aria-hidden="true" focusable="false">
+        <symbol id="icon-overview" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><path d="M15 17.5l2 2 4-5"></path></symbol>
+        <symbol id="icon-realtime" viewBox="0 0 24 24"><path d="M3 12h4l2.2-6 4.6 12L16 12h5"></path></symbol>
+        <symbol id="icon-collection" viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1.5"></rect><rect x="14" y="4" width="6" height="6" rx="1.5"></rect><rect x="9" y="14" width="6" height="6" rx="1.5"></rect><path d="M10 7h4M12 10v4"></path></symbol>
+        <symbol id="icon-history" viewBox="0 0 24 24"><path d="M4 19V5M4 19h16M7 15l3-3 3 2 4-6M17 8h3v3"></path></symbol>
+        <symbol id="icon-events" viewBox="0 0 24 24"><path d="M12 3l9 16H3zM12 9v4M12 17h.01"></path></symbol>
+        <symbol id="icon-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.25"></circle><path d="M19.2 14.8l1.3 1.1-2 3.4-1.6-.6a8 8 0 0 1-2.2 1.3l-.3 1.7h-4l-.3-1.7a8 8 0 0 1-2.2-1.3l-1.6.6-2-3.4 1.3-1.1a8 8 0 0 1 0-2.6l-1.3-1.1 2-3.4 1.6.6A8 8 0 0 1 10.1 7l.3-1.7h4l.3 1.7a8 8 0 0 1 2.2 1.3l1.6-.6 2 3.4-1.3 1.1a8 8 0 0 1 0 2.6z"></path></symbol>
+        <symbol id="icon-operations" viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-2.8 8.1-7 10-4.2-1.9-7-5.5-7-10V6z"></path><circle cx="12" cy="10" r="2.25"></circle><path d="M8.5 16c.7-1.8 1.9-2.7 3.5-2.7s2.8.9 3.5 2.7"></path></symbol>
+        <symbol id="icon-channel" viewBox="0 0 24 24"><path d="M7 7h10v10H7zM3 10h4M17 10h4M3 14h4M17 14h4"></path><circle cx="10" cy="12" r=".7"></circle><circle cx="14" cy="12" r=".7"></circle></symbol>
+        <symbol id="icon-master" viewBox="0 0 24 24"><rect x="8" y="3" width="8" height="6" rx="1.5"></rect><rect x="3" y="15" width="7" height="6" rx="1.5"></rect><rect x="14" y="15" width="7" height="6" rx="1.5"></rect><path d="M12 9v3M6.5 15v-3h11v3"></path></symbol>
+        <symbol id="icon-device" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"></rect><path d="M8 7h8M8 11h8M8 15h5"></path><circle cx="16.5" cy="16.5" r="1"></circle></symbol>
+        <symbol id="icon-server" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="1.5"></rect><rect x="3" y="14" width="18" height="6" rx="1.5"></rect><path d="M7 7h.01M7 17h.01M11 7h7M11 17h7"></path></symbol>
+        <symbol id="icon-network" viewBox="0 0 24 24"><circle cx="12" cy="5" r="2.5"></circle><circle cx="5" cy="18" r="2.5"></circle><circle cx="19" cy="18" r="2.5"></circle><path d="M10.8 7.2L6.2 15.8M13.2 7.2l4.6 8.6M7.5 18h9"></path></symbol>
+        <symbol id="icon-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3.5 2"></path></symbol>
+        <symbol id="icon-mqtt" viewBox="0 0 24 24"><circle cx="6" cy="18" r="1.5"></circle><path d="M6 13a5 5 0 0 1 5 5M6 8a10 10 0 0 1 10 10M6 3a15 15 0 0 1 15 15"></path></symbol>
+        <symbol id="icon-identity" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"></rect><circle cx="8" cy="11" r="2"></circle><path d="M5.5 16c.5-1.8 1.3-2.7 2.5-2.7s2 .9 2.5 2.7M13 10h5M13 14h5"></path></symbol>
+        <symbol id="icon-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.6-4 3-6 7-6s6.4 2 7 6"></path></symbol>
+        <symbol id="icon-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v2"></path></symbol>
+        <symbol id="icon-logout" viewBox="0 0 24 24"><path d="M10 4H5v16h5M14 8l4 4-4 4M9 12h9"></path></symbol>
+        <symbol id="icon-back" viewBox="0 0 24 24"><path d="M19 12H5M10 7l-5 5 5 5"></path></symbol>
+        <symbol id="icon-forward" viewBox="0 0 24 24"><path d="M5 12h14M14 7l5 5-5 5"></path></symbol>
+        <symbol id="icon-alert" viewBox="0 0 24 24"><path d="M12 3l9 16H3zM12 9v4M12 17h.01"></path></symbol>
+        <symbol id="icon-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"></path></symbol>
+    </svg>
+    <div class="screen-grid">
+        <aside class="sidebar-shell" aria-label="主导航">
+            <button class="nav-toggle" type="button" data-nav-toggle aria-label="打开全菜单" title="打开全菜单" aria-haspopup="dialog" aria-controls="global-navigation" aria-expanded="false">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+
+            <nav class="side-nav tech-frame">
+                {{if .CanViewOverview}}<a class="nav-item {{if eq .ActiveNav "overview"}}active{{end}}" href="/overview" title="系统概览" {{if eq .ActiveNav "overview"}}aria-current="page"{{end}}>
+                    <span class="nav-icon">
+                        <svg class="ui-icon" aria-hidden="true"><use href="#icon-overview"></use></svg>
+                    </span>
+                    <span class="nav-copy">
+                        <span class="nav-label">系统概览</span>
+                        <span class="nav-desc">运行状态与系统摘要</span>
+                    </span>
+                </a>{{end}}
+                {{if .CanViewRealtime}}<a class="nav-item {{if eq .ActiveNav "realtime"}}active{{end}}" href="/realtime" title="实时监控" {{if eq .ActiveNav "realtime"}}aria-current="page"{{end}}>
+                    <span class="nav-icon">
+                        <svg class="ui-icon" aria-hidden="true"><use href="#icon-realtime"></use></svg>
+                    </span>
+                    <span class="nav-copy">
+                        <span class="nav-label">实时监控</span>
+                        <span class="nav-desc">监控数据与刷新状态</span>
+                    </span>
+                </a>{{end}}
+                {{if .CanManageCollection}}<a class="nav-item {{if eq .ActiveNav "collection"}}active{{end}}" href="/collection" title="采集管理" {{if eq .ActiveNav "collection"}}aria-current="page"{{end}}>
+                    <span class="nav-icon">
+                        <svg class="ui-icon" aria-hidden="true"><use href="#icon-collection"></use></svg>
+                    </span>
+                    <span class="nav-copy">
+                        <span class="nav-label">采集管理</span>
+                        <span class="nav-desc">通道、主站与设备配置</span>
+                    </span>
+                </a>{{end}}
+                {{if .CanViewHistory}}<a class="nav-item {{if eq .ActiveNav "history"}}active{{end}}" href="/history" title="历史数据" {{if eq .ActiveNav "history"}}aria-current="page"{{end}}>
+                    <span class="nav-icon">
+                        <svg class="ui-icon" aria-hidden="true"><use href="#icon-history"></use></svg>
+                    </span>
+                    <span class="nav-copy">
+                        <span class="nav-label">历史数据</span>
+                        <span class="nav-desc">设备趋势摘要与曲线</span>
+                    </span>
+                </a>{{end}}
+                {{if .CanViewEvents}}<a class="nav-item {{if eq .ActiveNav "events"}}active{{end}}" href="/events" title="事件告警" {{if eq .ActiveNav "events"}}aria-current="page"{{end}}>
+                    <span class="nav-icon">
+                        <svg class="ui-icon" aria-hidden="true"><use href="#icon-events"></use></svg>
+                    </span>
+                    <span class="nav-copy">
+                        <span class="nav-label">事件告警</span>
+                        <span class="nav-desc">当前告警与历史事件</span>
+                    </span>
+                </a>{{end}}
+                {{if or .CanManageSystemSettings .CanManageNetwork .CanManageMqtt .CanManageDeviceTemplates .CanManageModbusServer .CanManageModbusMappings}}<a class="nav-item {{if eq .ActiveNav "settings"}}active{{end}}" href="/settings" title="系统设置" {{if eq .ActiveNav "settings"}}aria-current="page"{{end}}>
+                    <span class="nav-icon">
+                        <svg class="ui-icon" aria-hidden="true"><use href="#icon-settings"></use></svg>
+                    </span>
+                    <span class="nav-copy">
+                        <span class="nav-label">系统设置</span>
+                        <span class="nav-desc">设备标识与页面名称</span>
+                    </span>
+                </a>{{end}}
+                {{if .CanManageOperations}}<a class="nav-item {{if eq .ActiveNav "operations"}}active{{end}}" href="/operations" title="运维管理" {{if eq .ActiveNav "operations"}}aria-current="page"{{end}}>
+                    <span class="nav-icon">
+                        <svg class="ui-icon" aria-hidden="true"><use href="#icon-operations"></use></svg>
+                    </span>
+                    <span class="nav-copy">
+                        <span class="nav-label">运维管理</span>
+                        <span class="nav-desc">用户权限、维护与诊断</span>
+                    </span>
+                </a>{{end}}
+            </nav>
+        </aside>
+
+        <main class="main-shell {{if eq .ActiveNav "overview"}}overview-main-shell{{end}} {{if eq .ActiveNav "settings"}}settings-main-shell{{end}} {{if eq .ActiveNav "operations"}}operations-main-shell{{end}} {{if hasPrefix .CurrentPath "/device-history"}}device-history-main-shell{{end}} {{if or (eq .ActiveNav "overview") (eq .ActiveNav "collection") (eq .ActiveNav "realtime") (and (eq .ActiveNav "history") (not (hasPrefix .CurrentPath "/device-history"))) (eq .ActiveNav "events")}}page-viewport-shell{{end}}">
+            <header class="topbar tech-frame">
+                <div class="topbar-left">
+                    <div class="topbar-product">
+                        <span class="topbar-product-mark">知</span>
+                        <span class="topbar-product-name" title="{{.SystemDisplayName}}">{{.SystemDisplayName}}</span>
+                    </div>
+                    <div class="topbar-page-context">
+                        <span class="topbar-page-icon" aria-hidden="true">
+                            <svg class="ui-icon">
+                                {{if eq .ActiveNav "overview"}}<use href="#icon-overview"></use>
+                                {{else if eq .ActiveNav "realtime"}}<use href="#icon-realtime"></use>
+                                {{else if eq .ActiveNav "collection"}}<use href="#icon-collection"></use>
+                                {{else if eq .ActiveNav "history"}}<use href="#icon-history"></use>
+                                {{else if eq .ActiveNav "events"}}<use href="#icon-events"></use>
+                                {{else if eq .ActiveNav "settings"}}<use href="#icon-settings"></use>
+                                {{else if eq .ActiveNav "operations"}}<use href="#icon-operations"></use>
+                                {{else}}<use href="#icon-overview"></use>{{end}}
+                            </svg>
+                        </span>
+                        <div class="topbar-title-group">
+                            <h1>{{.Title}}</h1>
+                            <p>{{.Subtitle}}</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="topbar-status">
+                    <span class="pill {{if .BackendReachable}}status-ok{{else}}status-bad{{end}}" id="backend-status-pill">
+                        {{if .BackendReachable}}后端可达{{else}}后端不可达{{end}}
+                    </span>
+                    <div class="clock-panel">
+                        <svg class="ui-icon clock-icon" aria-hidden="true"><use href="#icon-clock"></use></svg>
+                        <span class="clock-copy"><span id="console-clock" class="clock-value">--:--:--</span></span>
+                    </div>
+                    {{if .Authenticated}}
+                    <button
+                        type="button"
+                        class="user-chip account-menu-button"
+                        data-channel-modal-open="account-password-modal"
+                        aria-haspopup="dialog"
+                        aria-controls="account-password-modal"
+                        title="打开账户设置">
+                        <svg class="ui-icon" aria-hidden="true"><use href="#icon-user"></use></svg>
+                        <span class="user-chip-copy"><strong>{{.CurrentUsername}}</strong><small>{{.CurrentRoleText}}</small></span>
+                    </button>
+                    {{end}}
+                    {{if .Authenticated}}
+                    <form class="logout-form" method="post" action="/logout">
+                        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                        <button class="btn btn-secondary btn-small" type="submit"><svg class="ui-icon" aria-hidden="true"><use href="#icon-logout"></use></svg><span>退出</span></button>
+                    </form>
+                    {{end}}
+                </div>
+            </header>
+
+            <div class="content-stack">
+                {{block "content" .}}{{end}}
+            </div>
+        </main>
+    </div>
+
+    {{if .Authenticated}}
+    <div class="global-nav-overlay" id="global-navigation" data-global-nav aria-hidden="true" hidden>
+        <button class="global-nav-backdrop" type="button" data-global-nav-close aria-label="关闭全菜单"></button>
+        <section class="global-nav-dialog tech-frame" role="dialog" aria-modal="true" aria-labelledby="global-navigation-title" tabindex="-1">
+            <header class="global-nav-header">
+                <div>
+                    <span class="topbar-tag">全菜单</span>
+                    <h2 id="global-navigation-title">选择功能页面</h2>
+                    <p>集中查看当前账号可访问的控制台入口。</p>
+                </div>
+                <button class="btn btn-secondary btn-inline" type="button" data-global-nav-close>关闭</button>
+            </header>
+            <nav class="global-nav-grid" data-global-nav-grid aria-label="全部功能页面"></nav>
+        </section>
+    </div>
+
+    <div class="channel-modal account-password-modal-shell" id="account-password-modal" aria-hidden="true" data-clear-passwords-on-close>
+        <div class="channel-modal-backdrop" data-channel-modal-close></div>
+        <div class="channel-modal-dialog tech-frame account-password-modal" role="dialog" aria-modal="true" aria-labelledby="account-password-modal-title">
+            <header class="channel-modal-header">
+                <div>
+                    <span class="topbar-tag">账户安全</span>
+                    <h3 id="account-password-modal-title">修改我的密码</h3>
+                    <p>修改成功后保留当前登录，其他同账号会话将自动失效。</p>
+                </div>
+                <button type="button" class="btn btn-secondary btn-inline modal-close-btn" data-channel-modal-close>关闭</button>
+            </header>
+            <div class="channel-modal-body">
+                <form class="settings-form account-password-form" method="post" action="/account/password">
+                    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                    <input type="hidden" name="redirect" value="{{.CurrentPath}}">
+                    <div class="channel-form-grid account-password-fields">
+                        <label class="form-field form-field-wide">
+                            <span class="field-label">当前密码</span>
+                            <input name="current_password" type="password" data-keyboard="password" maxlength="256" autocomplete="current-password" required>
+                        </label>
+                        <label class="form-field form-field-wide">
+                            <span class="field-label">新密码</span>
+                            <input name="new_password" type="password" data-keyboard="password" minlength="8" maxlength="256" autocomplete="new-password" required>
+                        </label>
+                        <label class="form-field form-field-wide">
+                            <span class="field-label">确认新密码</span>
+                            <input name="confirm_new_password" type="password" data-keyboard="password" minlength="8" maxlength="256" autocomplete="new-password" required>
+                        </label>
+                    </div>
+                    <div class="channel-form-actions settings-form-actions">
+                        <span class="field-hint">新密码至少 8 位，不能与当前密码相同。</span>
+                        <button type="button" class="btn btn-secondary" data-channel-modal-close>取消</button>
+                        <button class="btn btn-primary" type="submit">确认修改</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    {{end}}
+
+    {{if .Authenticated}}
+    <div class="channel-modal app-confirm-modal" id="app-confirm-modal" aria-hidden="true" data-app-confirm-modal>
+        <div class="channel-modal-backdrop" data-app-confirm-cancel></div>
+        <div class="channel-modal-dialog tech-frame app-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="app-confirm-title" aria-describedby="app-confirm-message">
+            <header class="channel-modal-header">
+                <div><h3 id="app-confirm-title" data-app-confirm-title>确认操作</h3></div>
+                <button type="button" class="btn btn-secondary btn-inline modal-close-btn" data-app-confirm-cancel>关闭</button>
+            </header>
+            <div class="channel-modal-body app-confirm-body">
+                <div class="app-confirm-context hidden" data-app-confirm-context></div>
+                <p id="app-confirm-message" data-app-confirm-message></p>
+            </div>
+            <footer class="app-confirm-actions">
+                <button type="button" class="btn btn-secondary" data-app-confirm-cancel>取消</button>
+                <button type="button" class="btn btn-primary" data-app-confirm-accept>确认执行</button>
+            </footer>
+        </div>
+    </div>
+    {{end}}
+
+    {{if ne .ActiveNav "login"}}
+    <div class="toast-container" data-toast-container aria-live="polite" aria-atomic="false">
+        {{if .Flash}}
+        <div class="toast toast-{{.Flash.Type}}" data-toast data-toast-autohide="true">
+            <div class="toast-message">{{.Flash.Text}}</div>
+            <button type="button" class="toast-dismiss" data-toast-dismiss aria-label="关闭提示" title="关闭提示"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
+        </div>
+        {{end}}
+        {{if and .ErrorMessage (ne .ActiveNav "realtime")}}
+        <div class="toast toast-error" data-toast data-toast-autohide="true">
+            <div class="toast-message">{{.ErrorMessage}}</div>
+            <button type="button" class="toast-dismiss" data-toast-dismiss aria-label="关闭提示" title="关闭提示"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"></use></svg></button>
+        </div>
+        {{end}}
+    </div>
+    {{end}}
+
+    <script src="/static/app-core.js?v={{staticAssetVersion}}"></script>
+    <script src="/static/app-motion.js?v={{staticAssetVersion}}"></script>
+    <script src="/static/app-navigation.js?v={{staticAssetVersion}}"></script>
+    {{if eq .ActiveNav "overview"}}
+    <script src="/static/overview.js?v={{staticAssetVersion}}" data-page-controller="overview"></script>
+    {{else if eq .ActiveNav "realtime"}}
+    <script src="/static/realtime.js?v={{staticAssetVersion}}" data-page-controller="realtime"></script>
+    {{else if eq .ActiveNav "settings"}}
+    {{if hasPrefix .CurrentPath "/settings/device-types"}}
+    <script src="/static/device-types.js?v={{staticAssetVersion}}" data-page-controller="device-types"></script>
+    {{else if hasPrefix .CurrentPath "/settings/modbus-server"}}
+    <script src="/static/modbus-server.js?v={{staticAssetVersion}}" data-page-controller="modbus-server"></script>
+    {{else}}
+    <script src="/static/settings.js?v={{staticAssetVersion}}" data-page-controller="settings"></script>
+    {{end}}
+    {{else if eq .ActiveNav "operations"}}
+    <script src="/static/maintenance.js?v={{staticAssetVersion}}" data-page-controller="maintenance"></script>
+    <script src="/static/operations.js?v={{staticAssetVersion}}" data-page-controller="operations"></script>
+    {{else if eq .ActiveNav "collection"}}
+    <script src="/static/collection.js?v={{staticAssetVersion}}" data-page-controller="collection"></script>
+    {{else if eq .ActiveNav "history"}}
+    <script src="/static/history.js?v={{staticAssetVersion}}" data-page-controller="history"></script>
+    {{else if eq .ActiveNav "events"}}
+    <script src="/static/events.js?v={{staticAssetVersion}}" data-page-controller="events"></script>
+    {{end}}
+    <script src="/static/virtual-keyboard-loader.js?v={{staticAssetVersion}}" data-asset-version="{{staticAssetVersion}}"></script>
+</body>
+</html>
+{{end}}

@@ -1,0 +1,21 @@
+[Unit]
+Description=Edge Controller Interrupted Upgrade Recovery
+After=local-fs.target
+Before=edge-controller.service edge-web.service edge-log-rotator.service
+Wants=edge-upgrade-recovery-verify.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/edge-controller/update
+ExecStartPre=/usr/bin/chown root:edge-controller /opt/edge-controller/log/update.log
+ExecStartPre=/usr/bin/chmod 0640 /opt/edge-controller/log/update.log
+ExecStart=/usr/bin/python3 /opt/edge-controller/update/recovery/update-manager.py recover --reason systemd-recovery
+TimeoutStartSec=10min
+UMask=0077
+StandardOutput=append:/opt/edge-controller/log/update.log
+StandardError=append:/opt/edge-controller/log/update.log
+
+[Install]
+WantedBy=multi-user.target

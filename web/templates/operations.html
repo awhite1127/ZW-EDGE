@@ -1,0 +1,227 @@
+{{define "content"}}
+{{/* 运维入口页：根据当前会话权限展示用户、维护、配置和诊断功能卡片。 */}}
+<section class="operations-home-grid function-entry-grid">
+    {{if .CanManageUsers}}
+    <article class="panel tech-frame settings-card operations-entry-card">
+        <div class="settings-card-head">
+            <div class="module-copy">
+                <h2>用户与权限</h2>
+            </div>
+        </div>
+        {{if .UsersState.ErrorMessage}}
+        <p class="settings-danger-hint">{{userErrorText .UsersState.ErrorMessage}}</p>
+        {{else}}
+        <div class="operations-summary-row">
+            <span>用户总数 <strong>{{.UserCount}}</strong></span>
+            <span>启用用户 <strong>{{.EnabledUserCount}}</strong></span>
+            <span>当前角色 <strong>{{.CurrentRoleText}}</strong></span>
+        </div>
+        {{end}}
+        <div class="settings-maintenance-actions">
+            <a class="btn btn-primary" href="/operations/users">进入用户与权限</a>
+        </div>
+    </article>
+    {{end}}
+
+    {{if .CanManageApplicationUpdate}}
+    <article class="panel tech-frame settings-card operations-entry-card application-update-entry" data-application-update-entry data-status-url="/api/application-update/status">
+        <div class="settings-card-head">
+            <div class="module-copy">
+                <h2>应用升级</h2>
+                <p class="panel-subtitle">用于通过本地升级包更新当前应用程序，升级过程将保留现有配置和历史数据。</p>
+            </div>
+        </div>
+        <p class="application-update-entry-version hidden" data-update-entry-version>当前版本：<strong data-update-entry-current>-</strong></p>
+        <div class="settings-maintenance-actions">
+            <button class="btn btn-primary" type="button" data-update-open data-channel-modal-open="application-update-modal" aria-haspopup="dialog" aria-controls="application-update-modal">应用升级</button>
+        </div>
+    </article>
+    {{end}}
+
+    <article class="panel tech-frame settings-card operations-entry-card">
+        <div class="settings-card-head">
+            <div class="module-copy">
+                <h2>数据维护</h2>
+            </div>
+        </div>
+        {{if .MaintenanceState.ErrorMessage}}
+        <p class="settings-danger-hint">{{userErrorText .MaintenanceState.ErrorMessage}}</p>
+        {{else}}
+        <div class="operations-summary-row">
+            <span>10 分钟 <strong>{{.Maintenance.CurrentRaw10MinCount}}</strong></span>
+            <span>小时聚合 <strong>{{.Maintenance.CurrentHourCount}}</strong></span>
+            <span>天聚合 <strong>{{.Maintenance.CurrentDayCount}}</strong></span>
+        </div>
+        <p class="operations-entry-note">保留：10 分钟 {{.Maintenance.Raw10MinRetentionHours}} 小时 · 小时 {{.Maintenance.HourRetentionDays}} 天 · 日 {{.Maintenance.DayRetentionDays}} 天</p>
+        {{end}}
+        {{if .CanManageDataMaintenance}}
+        <form class="settings-maintenance-actions" method="post" action="/actions/history/cleanup-expired" data-history-cleanup-form>
+            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+            <input type="hidden" name="redirect" value="/operations">
+            <button class="btn btn-secondary" type="submit">清理历史数据</button>
+        </form>
+        {{end}}
+    </article>
+
+    {{if .CanImportExportConfig}}
+    <article class="panel tech-frame settings-card operations-entry-card">
+        <div class="settings-card-head">
+            <div class="module-copy">
+                <h2>配置备份与恢复</h2>
+            </div>
+        </div>
+        <div class="operations-summary-row">
+            <span>格式 <strong>JSON</strong></span>
+            <span>版本 <strong>v4</strong></span>
+        </div>
+        <p class="operations-entry-note">包含网络配置；跨设备导入静态 IP 可能造成地址冲突。MQTT 密码、TLS 证书文件、用户账号、历史数据和事件数据不随配置包迁移。</p>
+        <div class="settings-maintenance-actions operations-dual-actions">
+            <a class="btn btn-secondary" href="/settings/config/export">导出配置</a>
+            <button class="btn btn-primary" type="button" data-channel-modal-open="operation-config-import-modal" aria-haspopup="dialog" aria-controls="operation-config-import-modal">导入配置</button>
+        </div>
+    </article>
+    {{end}}
+
+    {{if .CanExportDiagnostics}}
+    <article class="panel tech-frame settings-card operations-entry-card">
+        <div class="settings-card-head">
+            <div class="module-copy">
+                <h2>现场诊断</h2>
+                <p class="panel-subtitle">导出历史事件、运行快照和进程日志。</p>
+            </div>
+        </div>
+        <div class="operations-summary-row">
+            <span>诊断包 <strong>ZIP</strong></span>
+            <span>用途 <strong>排障</strong></span>
+        </div>
+        <div class="settings-maintenance-actions">
+            <a class="btn btn-secondary" href="/events/diagnostics/export">导出诊断包</a>
+        </div>
+    </article>
+    {{end}}
+
+    {{if .CanFactoryReset}}
+    <article class="panel tech-frame settings-card operations-entry-card operations-danger-card">
+        <div class="settings-card-head">
+            <div class="module-copy">
+                <h2>系统维护</h2>
+            </div>
+        </div>
+        <p class="settings-danger-hint">恢复业务配置和数据；保留网络配置、设备类型、软件与维护资料。</p>
+        <form class="settings-maintenance-actions" method="post" action="/settings/factory-reset" data-factory-reset-form>
+            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+            <input type="hidden" name="redirect" value="/operations">
+            <button class="btn btn-danger" type="submit">恢复出厂</button>
+        </form>
+    </article>
+    {{end}}
+</section>
+
+{{if .CanImportExportConfig}}
+<div class="channel-modal" id="operation-config-import-modal" aria-hidden="true">
+    <div class="channel-modal-backdrop" data-channel-modal-close></div>
+    <div class="channel-modal-dialog tech-frame operations-modal" role="dialog" aria-modal="true" aria-labelledby="operation-config-import-title">
+        <header class="channel-modal-header"><h3 id="operation-config-import-title">导入配置</h3><button type="button" class="btn btn-secondary btn-inline" data-channel-modal-close>关闭</button></header>
+        <form class="channel-modal-body settings-form config-import-form" action="/settings/config/import" data-config-import-form novalidate>
+            <label class="form-field form-field-wide"><span class="field-label">JSON 配置文件</span><input name="config_file" type="file" accept="application/json,.json" required data-config-import-file></label>
+            <p class="config-import-file-name muted-text" data-config-import-file-name>尚未选择文件</p>
+            <p class="field-hint">仅支持 version 4，文件不超过 2 MB。网络配置会随包导入；静态 IP 在另一台设备上可能产生冲突。MQTT 密码、TLS 证书文件内容、用户账号、历史数据和事件数据不会迁移。</p>
+            <div class="channel-save-feedback hidden" role="status" aria-live="polite" data-config-import-feedback></div>
+            <div class="channel-form-actions"><button type="button" class="btn btn-secondary" data-channel-modal-close>取消</button><button class="btn btn-primary" type="submit" data-config-import-submit>导入配置</button></div>
+        </form>
+    </div>
+</div>
+{{end}}
+
+{{if .CanManageApplicationUpdate}}
+<div class="channel-modal application-update-modal" id="application-update-modal" aria-hidden="true">
+    <div class="channel-modal-backdrop" data-update-modal-close></div>
+    <div class="channel-modal-dialog tech-frame application-update-dialog" role="dialog" aria-modal="true" aria-labelledby="application-update-title" tabindex="-1"
+        data-application-update
+        data-version-url="/api/application-update/version"
+        data-status-url="/api/application-update/status"
+        data-upload-url="/api/application-update/upload"
+        data-start-url="/api/application-update/start"
+        data-watch-url="/api/application-update/watch">
+        <header class="channel-modal-header application-update-dialog-header">
+            <div>
+                <h3 id="application-update-title">应用升级</h3>
+                <p>校验通过后再启动升级；配置和历史数据将继续保留。</p>
+            </div>
+            <button type="button" class="btn btn-secondary btn-inline" data-update-modal-close>关闭</button>
+        </header>
+        <div class="channel-modal-body application-update-dialog-body">
+            <div class="application-update-dialog-status">
+                <div class="application-update-summary">
+                    <span>当前版本<strong data-update-current-version>正在读取</strong></span>
+                    <span>升级状态<strong data-update-state-text>正在读取</strong></span>
+                </div>
+                <span class="status-neutral application-update-state-badge" data-update-state>正在读取状态</span>
+            </div>
+
+            <section class="application-update-stage" data-update-selection-stage>
+                <div class="application-update-stage-title"><span>选择升级包</span><p>支持 RK3562 正式发布包，文件不超过 256 MiB。</p></div>
+                <form class="application-update-upload" data-update-upload-form action="/api/application-update/upload" novalidate>
+                    <label class="btn btn-secondary application-update-file-button">
+                        <input type="file" name="upgrade_file" accept=".tar.gz,application/gzip" data-update-file hidden>
+                        <span>选择升级包</span>
+                    </label>
+                    <div class="application-update-file-copy">
+                        <strong data-update-file-name>尚未选择文件</strong>
+                        <span data-update-file-size>仅支持 edge-controller-rk3562-&lt;version&gt;.tar.gz</span>
+                    </div>
+                    <button class="btn btn-primary" type="submit" data-update-upload disabled>上传并校验</button>
+                </form>
+            </section>
+
+            <section class="application-update-stage application-update-package-stage hidden" data-update-package-stage aria-live="polite">
+                <div class="application-update-stage-title"><span>升级包校验结果</span><p data-update-package-state>升级包校验通过</p></div>
+                <div class="application-update-package" data-update-package>
+                    <div><span>目标版本</span><strong data-update-target-version>-</strong></div>
+                    <div><span>平台</span><strong data-update-platform>RK3562</strong></div>
+                    <div><span>架构</span><strong data-update-arch>ARM64</strong></div>
+                    <div><span>升级包大小</span><strong data-update-package-size>-</strong></div>
+                    <div><span>构建时间</span><strong data-update-build-time>-</strong></div>
+                    <div class="hidden"><span>产品</span><strong data-update-product>edge-controller</strong></div>
+                </div>
+            </section>
+
+            <section class="application-update-stage application-update-progress hidden" data-update-progress aria-live="polite">
+                <div class="application-update-progress-track" aria-hidden="true"><span data-update-progress-bar></span></div>
+                <strong data-update-progress-title>正在准备升级</strong>
+                <p data-update-progress-message>请稍候</p>
+            </section>
+
+            <div class="application-update-result hidden" data-update-result role="status" aria-live="polite"></div>
+        </div>
+        <footer class="channel-form-actions application-update-dialog-footer">
+            <button class="btn btn-secondary" type="button" data-update-modal-close>关闭</button>
+            <div class="application-update-primary-actions">
+                <button class="btn btn-secondary hidden" type="button" data-update-reselect>重新选择</button>
+                <button class="btn btn-primary hidden" type="button" data-update-start aria-haspopup="dialog" aria-controls="application-update-confirm-modal">开始升级</button>
+                <button class="btn btn-secondary hidden" type="button" data-update-reload>重新进入系统</button>
+            </div>
+        </footer>
+    </div>
+</div>
+
+<div class="channel-modal" id="application-update-confirm-modal" aria-hidden="true">
+    <div class="channel-modal-backdrop" data-channel-modal-close></div>
+    <div class="channel-modal-dialog tech-frame application-update-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="application-update-confirm-title">
+        <header class="channel-modal-header"><h3 id="application-update-confirm-title">确认应用升级</h3><button type="button" class="btn btn-secondary btn-inline" data-channel-modal-close>关闭</button></header>
+        <div class="channel-modal-body application-update-confirm-body">
+            <p>本次将把应用从 <strong data-update-confirm-current>-</strong> 升级到 <strong data-update-confirm-target>-</strong>。</p>
+            <ul>
+                <li>升级过程中业务服务会短暂停止。</li>
+                <li>当前配置和历史数据将被保留。</li>
+                <li>页面可能暂时断开，恢复后会自动继续查询结果。</li>
+            </ul>
+        </div>
+        <div class="channel-form-actions">
+            <button type="button" class="btn btn-secondary" data-channel-modal-close>取消</button>
+            <button type="button" class="btn btn-primary" data-update-confirm>确认并开始升级</button>
+        </div>
+    </div>
+</div>
+{{end}}
+{{end}}

@@ -1,0 +1,261 @@
+{{define "devices_panel"}}
+{{/* 设备局部模板：设备由主站显式数量与模板配置生成，此处仅提供查看和显示名称维护。 */}}
+<section class="panel tech-frame">
+    <div class="module-head">
+        <div class="module-copy">
+            <h2>设备列表</h2>
+            <p class="panel-subtitle">状态、关键数据与设备详情</p>
+        </div>
+        <div class="module-tools toolbar-strip">
+            {{if .CanManageDeviceNames}}<button type="button" class="btn btn-small btn-primary" data-device-batch-name-open>批量命名</button>{{end}}
+        </div>
+    </div>
+
+    {{if and .PollingRunning .ShowPollingNotice}}
+    <section class="flash flash-info config-lock-banner">
+        <span>采集运行中，配置调整在主站页完成。</span>
+    </section>
+    {{end}}
+
+    <div class="table-shell collection-list-shell devices-table">
+        <table class="data-table monitor-table collection-list-table">
+            <colgroup>
+                <col class="col-name">
+                <col class="col-reading">
+                <col class="col-time">
+                <col class="col-diagnosis">
+                <col class="col-action">
+            </colgroup>
+            <thead>
+                <tr>
+                    <th>设备</th>
+                    <th>关键数据</th>
+                    <th>最近采集</th>
+                    <th>诊断说明</th>
+                    <th class="collection-action-header">操作</th>
+                </tr>
+            </thead>
+            <tbody>
+            {{range .Rows}}
+                <tr
+                    data-device-batch-row
+                    data-device-id="{{.Config.DeviceID}}"
+                    data-current-name="{{.Config.DeviceName}}"
+                    data-system-name="{{.Config.SystemName}}"
+                    data-master-id="{{.Config.MasterID}}"
+                    data-master-name="{{.MasterLabel}}">
+                    <td class="device-identity-cell">
+                        <div class="table-primary device-list-name" title="{{if .Config.DeviceName}}{{.Config.DeviceName}}{{else}}未命名设备{{end}}">{{if .Config.DeviceName}}{{.Config.DeviceName}}{{else}}未命名设备{{end}}</div>
+                        <div class="table-secondary device-list-location" title="{{defaultText .ChannelName}} / 地址 {{.SlaveAddressText}}">{{defaultText .ChannelName}} / 地址 {{.SlaveAddressText}}</div>
+                    </td>
+                    <td class="wrap-text">
+                        {{if .SummaryPoints}}
+                        <div class="metric-list">
+                            {{range .SummaryPoints}}
+                            <span class="metric-chip {{if not .Valid}}metric-chip-warn{{end}}" title="{{if .Message}}{{.Message}}{{else}}{{.Quality}}{{end}}"><b>{{defaultText .Name}}</b><em>{{.Text}}</em></span>
+                            {{end}}
+                        </div>
+                        {{else}}
+                        <span class="table-message table-message-neutral">暂无数据</span>
+                        {{end}}
+                    </td>
+                    <td class="device-time-cell">{{if .HasStatus}}{{formatTimestamp .Status.UpdatedAtMS}}{{else}}-{{end}}</td>
+                    <td class="wrap-text collection-diagnosis-cell device-diagnosis-cell">
+                        <div class="collection-diagnosis-content"><span class="{{deviceDiagnosticClass .}}" title="{{deviceDiagnosticText .}}">{{deviceDiagnosticText .}}</span></div>
+                    </td>
+                    <td class="collection-action-cell">
+                        <div class="table-actions collection-row-actions master-actions device-row-actions">
+                            {{if $.CanManageDeviceNames}}
+                            <button
+                                type="button"
+                                class="btn btn-small btn-secondary"
+                                data-device-name-open
+                                data-device-id="{{.Config.DeviceID}}"
+                                data-system-name="{{.Config.SystemName}}"
+                                data-display-name="{{if ne .Config.DeviceName .Config.SystemName}}{{.Config.DeviceName}}{{end}}">
+                                编辑名称
+                            </button>
+                            {{end}}
+                            <button
+                                type="button"
+                                class="btn btn-small btn-primary"
+                                data-device-detail-open
+                                data-device-id="{{.Config.DeviceID}}">
+                                查看详情
+                            </button>
+                        </div>
+                    </td>
+                </tr>
+            {{else}}
+                <tr>
+                    <td colspan="5" class="empty-cell">
+                        <div class="collect-manage-empty">
+                            {{if not .CanModify}}
+                            <strong>暂无可查看的采集设备</strong>
+                            <span class="empty-secondary">当前没有可展示的设备配置。</span>
+                            {{else}}
+                            {{if eq .ChannelCount 0}}
+                            <strong>暂无采集设备</strong>
+                            <span class="empty-secondary">请先配置通道、主站和设备类型。</span>
+                            {{else if eq .MasterCount 0}}
+                            <strong>暂无采集设备</strong>
+                            <span class="empty-secondary">请先创建主站并绑定通道与设备类型。</span>
+                            {{else}}
+                            <strong>当前主站未推导出设备</strong>
+                            <span class="empty-secondary">请检查设备类型、读取区块、主站设备数量和首台设备基地址。</span>
+                            {{end}}
+                            {{end}}
+                            {{if .CanModify}}
+                            <a class="btn btn-small btn-secondary" href="/collection#masters">前往主站配置</a>
+                            {{end}}
+                        </div>
+                    </td>
+                </tr>
+            {{end}}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<div class="channel-modal" id="device-detail-modal" aria-hidden="true">
+    <div class="channel-modal-backdrop" data-device-detail-close></div>
+    <div class="channel-modal-dialog tech-frame device-detail-modal" role="dialog" aria-modal="true" aria-labelledby="device-detail-title">
+        <header class="channel-modal-header">
+            <div>
+                <span class="topbar-tag">设备</span>
+                <h3 id="device-detail-title" data-device-detail-title>设备详情</h3>
+                <p data-device-detail-subtitle>查看设备信息、当前状态和关键数据。</p>
+            </div>
+            <button type="button" class="btn btn-secondary btn-inline modal-close-btn" data-device-detail-close>关闭</button>
+        </header>
+        <div class="channel-modal-body device-detail-modal-body">
+            <div class="device-detail-feedback hidden" data-device-detail-feedback></div>
+            <nav class="device-detail-tabs hidden" role="tablist" aria-label="设备详情页面" data-device-detail-tabs>
+                <button type="button" class="device-detail-tab is-active" id="device-detail-tab-basic" role="tab" aria-selected="true" aria-controls="device-detail-panel-basic" data-device-detail-tab="basic">基本信息</button>
+                <button type="button" class="device-detail-tab" id="device-detail-tab-commands" role="tab" aria-selected="false" aria-controls="device-detail-panel-commands" tabindex="-1" data-device-detail-tab="commands">操控能力</button>
+            </nav>
+            <div class="device-detail-panel device-detail-basic-panel" id="device-detail-panel-basic" role="tabpanel" aria-labelledby="device-detail-tab-basic" data-device-detail-panel="basic">
+                <div class="device-detail-summary-strip" data-device-detail-summary></div>
+                <section class="device-detail-section">
+                    <h3>基本信息</h3>
+                    <div class="device-condition-card" data-device-detail-condition>正在加载...</div>
+                </section>
+                <section class="device-detail-section device-detail-points-section">
+                    <h3>当前数据</h3>
+                    <div data-device-detail-points>正在加载...</div>
+                </section>
+            </div>
+            {{if .CanExecuteDeviceCommands}}<section class="device-detail-panel device-detail-commands-panel hidden" id="device-detail-panel-commands" role="tabpanel" aria-labelledby="device-detail-tab-commands" data-device-detail-panel="commands" data-device-detail-commands-section>
+                <div data-device-detail-commands></div>
+            </section>{{end}}
+        </div>
+    </div>
+</div>
+
+{{if .CanManageDeviceNames}}
+<div class="channel-modal" id="device-name-modal" aria-hidden="true">
+    <div class="channel-modal-backdrop" data-device-name-close></div>
+    <div class="channel-modal-dialog tech-frame device-name-modal" role="dialog" aria-modal="true" aria-labelledby="device-name-modal-title">
+        <header class="channel-modal-header">
+            <div>
+                <span class="topbar-tag">设备名称</span>
+                <h3 id="device-name-modal-title">编辑设备名称</h3>
+                <p>只修改现场显示名称，不改变采集地址、设备类型和寄存器配置。</p>
+            </div>
+            <button type="button" class="btn btn-secondary btn-inline modal-close-btn" data-device-name-close>关闭</button>
+        </header>
+        <form class="channel-modal-body device-name-form" data-device-name-form>
+            <div class="device-detail-feedback hidden" data-device-name-feedback></div>
+            <label class="field-stack">
+                <span class="field-label">当前系统推导名称</span>
+                <input type="text" data-device-system-name readonly>
+            </label>
+            <label class="field-stack">
+                <span class="field-label">自定义设备名称</span>
+                <input type="text" data-keyboard="text-cn" data-device-display-name maxlength="40" placeholder="留空并保存可恢复系统推导名称">
+                <small>最多 40 个字符；同一主站下不建议使用重复名称。</small>
+            </label>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-secondary" data-device-name-close>取消</button>
+                <button type="submit" class="btn btn-primary" data-device-name-submit>保存设备名称</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="channel-modal" id="device-batch-name-modal" aria-hidden="true">
+    <div class="channel-modal-backdrop" data-device-batch-name-close></div>
+    <div class="channel-modal-dialog tech-frame device-batch-name-modal" role="dialog" aria-modal="true" aria-labelledby="device-batch-name-title">
+        <header class="channel-modal-header">
+            <div>
+                <span class="topbar-tag">设备名称</span>
+                <h3 id="device-batch-name-title">批量设备命名</h3>
+                <p>按设备列表顺序生成显示名称，不改变采集配置。</p>
+            </div>
+            <button type="button" class="btn btn-secondary btn-inline modal-close-btn" data-device-batch-name-close>关闭</button>
+        </header>
+        <form class="channel-modal-body device-batch-name-form" data-device-batch-name-form>
+            <div class="device-detail-feedback hidden" data-device-batch-name-feedback></div>
+            <div class="device-batch-scope-grid">
+                <label class="field-stack">
+                    <span class="field-label">作用范围</span>
+                    <select data-device-batch-scope>
+                        <option value="all">全部设备</option>
+                        <option value="master">指定主站</option>
+                    </select>
+                </label>
+                <label class="field-stack" data-device-batch-master-field>
+                    <span class="field-label">主站</span>
+                    <select data-device-batch-master></select>
+                </label>
+            </div>
+            <div class="device-batch-rule-grid">
+                <label class="field-stack device-batch-prefix-field">
+                    <span class="field-label">名称前缀</span>
+                    <input type="text" data-keyboard="text-cn" maxlength="40" value="设备" data-device-batch-prefix>
+                </label>
+                <label class="field-stack">
+                    <span class="field-label">起始序号</span>
+                    <input type="number" min="0" step="1" value="1" data-device-batch-start>
+                </label>
+                <label class="field-stack">
+                    <span class="field-label">序号位数</span>
+                    <select data-device-batch-digits>
+                        <option value="1">1</option>
+                        <option value="2" selected>2</option>
+                        <option value="3">3</option>
+                    </select>
+                </label>
+                <label class="field-stack">
+                    <span class="field-label">分隔符</span>
+                    <select data-device-batch-separator>
+                        <option value="-">-</option>
+                        <option value="_">_</option>
+                        <option value="">无</option>
+                    </select>
+                </label>
+            </div>
+            <section class="device-batch-preview">
+                <div class="device-batch-preview-head">
+                    <h4>命名预览</h4>
+                    <span data-device-batch-count>0 个设备</span>
+                </div>
+                <div class="table-shell device-batch-preview-shell">
+                    <table class="data-table">
+                        <thead><tr><th>当前设备名称</th><th>系统推导名称</th><th>新设备名称</th></tr></thead>
+                        <tbody data-device-batch-preview-body></tbody>
+                    </table>
+                </div>
+            </section>
+            <section class="device-batch-failures hidden" data-device-batch-failures></section>
+            <div class="modal-actions device-batch-actions">
+                <button type="button" class="btn btn-danger" data-device-batch-restore>恢复系统推导名称</button>
+                <span class="device-batch-action-spacer"></span>
+                <button type="button" class="btn btn-secondary" data-device-batch-name-close>取消</button>
+                <button type="submit" class="btn btn-primary" data-device-batch-submit>应用批量命名</button>
+            </div>
+        </form>
+    </div>
+</div>
+{{end}}
+{{end}}

@@ -1,0 +1,208 @@
+{{define "content"}}
+{{/* 实时监控页：通道、主站和设备配置与同一代运行快照共同构成完整视图。 */}}
+{{$dashboard := .Dashboard}}
+{{$rows := .Rows}}
+
+<section class="realtime-page page-viewport-root">
+
+{{if not .BackendReachable}}
+<section class="realtime-alert tech-frame" id="realtime-connection-alert">
+    <div class="realtime-alert-main">
+        <div>
+            <strong>后端服务未连接</strong>
+            <p>{{defaultText .ErrorMessage}}</p>
+        </div>
+    </div>
+    <button type="button" class="btn btn-small" data-realtime-reconnect>再连接</button>
+</section>
+{{else}}
+<section class="realtime-alert tech-frame hidden" id="realtime-connection-alert">
+    <div class="realtime-alert-main">
+        <div>
+            <strong>后端服务未连接</strong>
+            <p></p>
+        </div>
+    </div>
+    <button type="button" class="btn btn-small" data-realtime-reconnect>再连接</button>
+</section>
+{{end}}
+
+<section class="realtime-overview-grid">
+    <article class="realtime-card tech-frame">
+        <div class="realtime-card-head">
+            <h2 class="realtime-card-title"><svg class="ui-icon realtime-card-icon" aria-hidden="true"><use href="#icon-channel"></use></svg><span>通道</span></h2>
+            <span class="realtime-layer-summary" id="realtime-channel-summary">{{$dashboard.ChannelSummary.OnlineCount}} / {{$dashboard.ChannelSummary.TotalCount}} 在线</span>
+        </div>
+        <div class="realtime-layer-list" id="realtime-channel-list" data-realtime-auto-scroll="channel" tabindex="0" aria-label="通道运行状态，可上下滚动">
+            {{range $dashboard.Channels}}
+            <div class="realtime-layer-item">
+                <span class="layer-dot {{.StateClass}}"></span>
+                <div>
+                    <strong>{{.Name}}</strong>
+                </div>
+                <b class="realtime-layer-state {{.StateClass}}" title="{{if .ErrorMessage}}{{.ErrorMessage}}{{else}}{{.StateText}}{{end}}">{{.StateText}}</b>
+            </div>
+            {{else}}
+            <div class="realtime-empty-mini">暂无通道配置</div>
+            {{end}}
+        </div>
+    </article>
+
+    <article class="realtime-card tech-frame">
+        <div class="realtime-card-head">
+            <h2 class="realtime-card-title"><svg class="ui-icon realtime-card-icon" aria-hidden="true"><use href="#icon-master"></use></svg><span>主站</span></h2>
+            <span class="realtime-layer-summary" id="realtime-master-summary">{{$dashboard.MasterSummary.OnlineCount}} / {{$dashboard.MasterSummary.TotalCount}} 在线</span>
+        </div>
+        <div class="realtime-layer-list" id="realtime-master-list" data-realtime-auto-scroll="master" tabindex="0" aria-label="主站运行状态，可上下滚动">
+            {{range $dashboard.Masters}}
+            <div class="realtime-layer-item">
+                <span class="layer-dot {{.StateClass}}"></span>
+                <div>
+                    <strong>{{.Name}}</strong>
+                    <small>{{.StateText}}</small>
+                </div>
+                <b>{{.OnlineCount}}/{{.TotalCount}} 在线</b>
+            </div>
+            {{else}}
+            <div class="realtime-empty-mini">暂无主站配置</div>
+            {{end}}
+        </div>
+    </article>
+
+    <article class="realtime-card tech-frame">
+        <div class="realtime-card-head">
+            <h2 class="realtime-card-title"><svg class="ui-icon realtime-card-icon" aria-hidden="true"><use href="#icon-device"></use></svg><span>设备</span></h2>
+            <span id="realtime-device-state" class="pill {{$dashboard.DeviceSummary.StateClass}}">{{$dashboard.DeviceSummary.StateText}}</span>
+        </div>
+        <div class="realtime-device-total">
+            <strong id="realtime-device-online">{{$dashboard.DeviceSummary.OnlineCount}}</strong>
+            <span>/</span>
+            <strong id="realtime-device-total">{{$dashboard.DeviceSummary.TotalCount}}</strong>
+            <em>在线设备</em>
+        </div>
+    </article>
+
+    <article class="realtime-card realtime-alarm-card tech-frame {{if $dashboard.DeviceSummary.AlarmCount}}is-alarm{{end}}" id="realtime-alarm-card">
+        <div class="realtime-card-head">
+            <h2 class="realtime-card-title"><svg id="realtime-alarm-icon" class="ui-icon realtime-card-icon realtime-alarm-icon {{if $dashboard.DeviceSummary.AlarmCount}}is-active{{else}}is-clear{{end}}" aria-hidden="true"><use href="#icon-alert"></use></svg><span>告警</span></h2>
+            <span id="realtime-alarm-state" class="pill {{if $dashboard.DeviceSummary.AlarmCount}}status-warn{{else}}status-ok{{end}}">{{if $dashboard.DeviceSummary.AlarmCount}}存在告警{{else}}状态正常{{end}}</span>
+        </div>
+        <div class="realtime-device-total realtime-alarm-total">
+            <strong id="realtime-alarm-count">{{$dashboard.DeviceSummary.AlarmCount}}</strong>
+            <em>报警设备</em>
+        </div>
+        <div class="realtime-alarm-device-viewport {{if gt $dashboard.DeviceSummary.AlarmCount 3}}is-carousel{{end}} {{if not $dashboard.DeviceSummary.AlarmCount}}is-hidden{{end}}" id="realtime-alarm-device-viewport">
+            <div class="realtime-alarm-device-track" id="realtime-alarm-device-track">
+                <div class="realtime-alarm-device-group">
+                    {{range $dashboard.DeviceSummary.AlarmDevicePreview}}<span class="realtime-alarm-device-item" data-alarm-name="{{.}}" title="{{.}}"><strong>{{.}}</strong><small hidden></small></span>{{end}}
+                </div>
+            </div>
+        </div>
+    </article>
+</section>
+
+<section class="panel tech-frame realtime-table-panel page-fill">
+    <div class="module-head">
+        <div class="module-copy realtime-title-copy">
+            <h2>当前设备数据 <span class="module-title-context" id="realtime-current-device-name"></span></h2>
+        </div>
+        <div class="module-tools toolbar-strip">
+            <label class="current-device-selector is-hidden" id="realtime-device-selector-wrap" for="realtime-device-selector">
+                <span>当前设备</span>
+                <select id="realtime-device-selector" aria-label="选择当前设备"></select>
+            </label>
+            <span class="toolbar-chip" id="realtime-table-status">{{$dashboard.TableStatusText}}</span>
+            <span class="toolbar-chip">最近刷新：<span id="realtime-refresh-time">{{if .RefreshedAt}}{{.RefreshedAt}}{{else}}未刷新{{end}}</span></span>
+        </div>
+    </div>
+
+    <div id="realtime-error" class="flash flash-error hidden">
+    </div>
+
+    <div class="realtime-table-shell">
+        <aside class="realtime-tree" id="realtime-filter-tree" aria-label="实时数据层级筛选">
+            <button type="button" class="tree-node tree-root tree-filter-node active" data-filter-type="all" data-filter-id="" data-filter-label="全部设备">
+                <span class="tree-node-icon" aria-hidden="true"><svg class="ui-icon"><use href="#icon-overview"></use></svg></span>
+                <strong>全部设备</strong>
+            </button>
+            {{if not $rows}}<div class="realtime-empty-mini tree-empty">暂无设备数据</div>{{end}}
+        </aside>
+        <div class="realtime-data-region">
+            <div class="table-shell table-shell-wide realtime-data-shell realtime-table-wrap {{if not $rows}}is-hidden{{end}}">
+            <table class="data-table monitor-table" id="realtime-table" data-refresh-url="/api/view/realtime" data-empty-text="{{$dashboard.EmptyStateText}}" data-initial-rows="{{jsonAttr $rows}}">
+                <colgroup>
+                    <col class="col-hierarchy">
+                    <col class="col-reading">
+                    <col class="col-diagnosis">
+                </colgroup>
+                <thead>
+                    <tr>
+                        <th>设备</th>
+                        <th>数据</th>
+                        <th class="realtime-diagnosis-heading">说明</th>
+                    </tr>
+                </thead>
+                <tbody id="realtime-table-body">
+                {{range $row := $rows}}
+                    <tr data-realtime-row-key="{{$row.StableKey}}" class="{{if .ErrorMessage}}row-alert{{else if .HasStatus}}{{if .Online}}row-live{{else}}row-offline{{end}}{{else}}row-muted{{end}}">
+                        <td class="realtime-cell-hierarchy">
+                            <div class="hierarchy-cell">
+                                <span class="hierarchy-line">{{defaultText .ChannelName}} / {{defaultText .MasterName}}</span>
+                                <span class="hierarchy-primary"><strong>{{defaultText .DeviceName}}</strong>{{if .ErrorMessage}}<span class="realtime-row-status status-bad">异常</span>{{else if .HasStatus}}{{if not .Online}}<span class="realtime-row-status status-warn">离线</span>{{end}}{{else}}<span class="realtime-row-status status-neutral">未采集</span>{{end}}</span>
+                            </div>
+                        </td>
+                        <td class="realtime-cell-reading">
+                            {{if .SummaryPoints}}
+                            {{if and .RealtimeGroupingEnabled .RealtimeGroups}}
+                            <div class="metric-group-list">
+                                {{range .RealtimeGroups}}
+                                <section class="metric-group" data-realtime-group-key="{{.ID}}">
+                                    <strong class="metric-group-title">{{defaultText .Name}}</strong>
+                                    <div class="metric-group-points">
+                                        {{range .Points}}
+                                        <span class="metric-chip {{if ne .StateClass "status-ok"}}metric-chip-warn{{end}} {{.StateClass}}" data-realtime-point-key="{{.StableKey}}" data-quality-state="{{.StateClass}}" title="{{if .Message}}{{.Message}}{{else}}{{.Quality}}{{end}}"><b>{{defaultText .Name}}</b><span class="metric-chip-reading"><em class="metric-chip-value" data-realtime-value-key="{{.StableKey}}">{{if .ValueText}}{{.ValueText}}{{else}}{{.Text}}{{end}}</em>{{if .Unit}}<small class="metric-chip-unit">{{.Unit}}</small>{{end}}</span></span>
+                                        {{end}}
+                                    </div>
+                                </section>
+                                {{end}}
+                            </div>
+                            {{else}}
+                            <div class="metric-list metric-list-ungrouped{{if eq (len .SummaryPoints) 1}} metric-list-single{{end}}">
+                                {{range .SummaryPoints}}
+                                <span class="metric-chip {{if ne .StateClass "status-ok"}}metric-chip-warn{{end}} {{.StateClass}}" data-realtime-point-key="{{.StableKey}}" data-quality-state="{{.StateClass}}" title="{{if .Message}}{{.Message}}{{else}}{{.Quality}}{{end}}"><b>{{defaultText .Name}}</b><span class="metric-chip-reading"><em class="metric-chip-value" data-realtime-value-key="{{.StableKey}}">{{if .ValueText}}{{.ValueText}}{{else}}{{.Text}}{{end}}</em>{{if .Unit}}<small class="metric-chip-unit">{{.Unit}}</small>{{end}}</span></span>
+                                {{end}}
+                            </div>
+                            {{end}}
+                            {{else}}
+                            <div class="metric-list">
+                                <span class="{{if .HasRealtime}}reading reading-live{{else}}reading reading-muted{{end}} metric-chip-value" data-realtime-value-key="{{$row.SummaryKey}}">{{.SummaryText}}</span>
+                            </div>
+                            {{end}}
+                        </td>
+                        <td class="wrap-text realtime-cell-error">
+                            {{if .ErrorMessage}}
+                            <span class="table-message table-message-bad" title="{{.ErrorMessage}}">{{.ErrorMessage}}</span>
+                            {{with diagnosisSuggestionText .Diagnosis}}
+                            <small class="table-message-note">建议：{{.}}</small>
+                            {{end}}
+                            {{else}}
+                            <span class="table-message table-message-neutral">—</span>
+                            {{end}}
+                        </td>
+                    </tr>
+                {{end}}
+                </tbody>
+            </table>
+            </div>
+            <div class="realtime-empty-panel {{if $rows}}is-hidden{{end}}" id="realtime-empty-panel">
+                <div class="realtime-empty-state">
+                    <strong id="realtime-empty-title">{{$dashboard.EmptyStateText}}</strong>
+                    <span class="empty-secondary">请到采集管理中配置通道、主站和设备类型。</span>
+                    <a class="btn btn-small btn-secondary" href="/collection">前往采集管理</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+</section>
+{{end}}

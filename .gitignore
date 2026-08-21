@@ -1,0 +1,62 @@
+# CMake and native build outputs
+build/
+build-*/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+Testing/
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.exe
+
+# Go build outputs and caches kept inside the repository
+.cache/
+.gocache/
+go-build*/
+*.test
+edge-controller
+edge-web
+
+# Release, packaging and staging outputs
+dist/
+staging/
+rootfs/
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+
+# Runtime state
+*.log
+*.pid
+*.sock
+*.db
+*.db-wal
+*.db-shm
+core
+core.*
+
+# Temporary scratch files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Editor, Python and operating-system metadata
+.vscode/
+.idea/
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Formal vendored source dependencies are intentionally retained.
+!backend/third_party/sqlite/sqlite3.c
+!backend/third_party/sqlite/sqlite3.h
+!backend/third_party/nlohmann/json.hpp
+!backend/third_party/nlohmann/LICENSE.MIT

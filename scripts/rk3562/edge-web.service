@@ -1,0 +1,21 @@
+[Unit]
+Description=Edge Controller Web UI
+Wants=edge-controller.service
+After=network.target edge-upgrade-recovery.service edge-controller.service
+
+[Service]
+Type=simple
+User=edge-web
+Group=edge-controller
+WorkingDirectory=/opt/edge-controller
+EnvironmentFile=/opt/edge-controller/config/edge-controller.env
+ExecCondition=+/usr/bin/python3 /opt/edge-controller/update/recovery/update-manager.py service-start-allowed
+ExecStart=/opt/edge-controller/bin/edge-web
+Restart=on-failure
+RestartSec=3
+UMask=0007
+StandardOutput=append:/opt/edge-controller/log/edge-web.log
+StandardError=append:/opt/edge-controller/log/edge-web.log
+
+[Install]
+WantedBy=multi-user.target

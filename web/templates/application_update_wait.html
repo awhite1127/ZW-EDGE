@@ -1,0 +1,33 @@
+{{define "content"}}
+<section class="application-update-wait-page">
+    <article class="panel tech-frame settings-card application-update-card"
+        data-application-update data-public-watch="true"
+        data-watch-url="/api/application-update/watch">
+        <div class="settings-card-head application-update-head">
+            <div class="module-copy"><h2>应用升级</h2><p class="panel-subtitle">服务正在升级并重新启动，本页会自动恢复状态查询。</p></div>
+            <span class="status-neutral application-update-state-badge" data-update-state>正在等待服务</span>
+        </div>
+        <div class="application-update-summary">
+            <span>当前版本<strong data-update-current-version>正在读取</strong></span>
+            <span>升级状态<strong data-update-state-text>正在等待服务</strong></span>
+        </div>
+        <section class="application-update-package hidden" data-update-package aria-live="polite">
+            <div><span>产品</span><strong data-update-product>edge-controller</strong></div>
+            <div><span>目标版本</span><strong data-update-target-version>-</strong></div>
+            <div><span>目标平台</span><strong data-update-platform>RK3562</strong></div>
+            <div><span>目标架构</span><strong data-update-arch>ARM64</strong></div>
+            <div><span>升级包</span><strong data-update-package-size>-</strong></div>
+            <div><span>构建时间</span><strong data-update-build-time>-</strong></div>
+        </section>
+        <section class="application-update-progress" data-update-progress aria-live="polite">
+            <div class="application-update-progress-track" aria-hidden="true"><span data-update-progress-bar></span></div>
+            <strong data-update-progress-title>服务正在升级并重新启动</strong>
+            <p data-update-progress-message>页面会自动继续尝试，无需手动刷新。</p>
+        </section>
+        <div class="application-update-result hidden" data-update-result role="status" aria-live="polite"></div>
+        <div class="settings-maintenance-actions application-update-actions">
+            <button class="btn btn-primary hidden" type="button" data-update-reload>重新进入系统</button>
+        </div>
+    </article>
+</section>
+{{end}}

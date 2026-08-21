@@ -1,0 +1,59 @@
+{{define "content"}}
+{{/* 通讯报文诊断页：按通道查看近期请求/响应帧，清空仅作用于内存诊断缓存。 */}}
+<section
+    class="panel tech-frame trace-page page-fill"
+    data-communication-traces
+    data-channel-id="{{.ChannelID}}"
+    data-query-url="/api/channels/{{urlPath .ChannelID}}/communication-traces?limit=10"
+    {{if .CanManageCollection}}data-clear-url="/api/channels/{{urlPath .ChannelID}}/communication-traces/clear"{{end}}>
+    <header class="subpage-header trace-toolbar">
+        <div class="subpage-header-top">
+            <a class="subpage-back-button" href="{{.BackURL}}" aria-label="返回采集管理" title="返回采集管理"><span class="subpage-back-icon" aria-hidden="true"><svg class="ui-icon"><use href="#icon-back"></use></svg></span><span>返回采集管理</span></a>
+            <span class="subpage-origin-badge">采集管理 · 通讯诊断</span>
+        </div>
+        <div class="subpage-title-row">
+            <div class="module-copy subpage-title-block">
+                <h2>通道通讯报文</h2>
+                <p class="panel-subtitle">查看当前通道最近 Modbus 请求 / 响应记录，用于现场通讯诊断。</p>
+            </div>
+            <div class="module-tools toolbar-strip">
+                <span class="toolbar-chip">通道 ID：<code>{{.ChannelID}}</code></span>
+                <span class="toolbar-chip">记录数量：<b data-trace-count>0</b></span>
+                <button type="button" class="btn btn-primary btn-small" data-trace-refresh>刷新</button>
+                {{if .CanManageCollection}}<button type="button" class="btn btn-danger btn-small" data-trace-clear>清空当前通道报文</button>{{end}}
+            </div>
+        </div>
+    </header>
+
+    <div class="trace-feedback hidden" data-trace-feedback></div>
+
+    <div class="trace-empty empty-block hidden" data-trace-empty>
+        <strong>暂无通讯报文记录</strong>
+        <span class="empty-secondary">请确认通道已启用并且采集轮询正在运行。</span>
+    </div>
+
+    <div class="table-shell table-shell-wide trace-table-shell" data-trace-table-shell>
+        <table class="data-table monitor-table trace-table">
+            <colgroup>
+                <col class="trace-col-time">
+                <col class="trace-col-result">
+                <col class="trace-col-request">
+                <col class="trace-col-response">
+            </colgroup>
+            <thead>
+                <tr>
+                    <th class="trace-col-time">时间</th>
+                    <th class="trace-col-result">结果</th>
+                    <th class="trace-col-request">请求帧</th>
+                    <th class="trace-col-response">响应帧</th>
+                </tr>
+            </thead>
+            <tbody data-trace-body>
+                <tr>
+                    <td colspan="4" class="empty-cell">正在读取通讯报文记录。</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</section>
+{{end}}

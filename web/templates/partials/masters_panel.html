@@ -1,0 +1,288 @@
+{{define "masters_panel"}}
+{{/* 主站配置局部模板：展示协议绑定、设备部署、轮询周期和模板关系。 */}}
+{{$page := .}}
+<section class="panel tech-frame">
+    <div class="module-head">
+        <div class="module-copy">
+            <h2>主站配置</h2>
+            <p class="panel-subtitle">通道、设备类型与设备数量</p>
+        </div>
+        <div class="module-tools toolbar-strip">
+            {{if .CanModify}}
+            <button
+                type="button"
+                class="btn btn-primary"
+                data-master-editor-open
+                data-mode="create"
+                data-save-url="/api/masters"
+                data-method="POST"
+                data-device-count="1">
+                新增主站
+            </button>
+            {{end}}
+        </div>
+    </div>
+
+    {{if and .PollingRunning .ShowPollingNotice}}
+    <section class="flash flash-info config-lock-banner">
+        <span>采集运行中，保存后自动恢复。</span>
+    </section>
+    {{end}}
+
+    <div class="table-shell collection-list-shell masters-table">
+        <table class="data-table monitor-table collection-list-table">
+            <colgroup>
+                <col class="col-name">
+                <col class="col-bind">
+                <col class="col-time">
+                <col class="col-diagnosis">
+                {{if .CanModify}}<col class="col-action">{{end}}
+            </colgroup>
+            <thead>
+                <tr>
+                    <th>主站名称</th>
+                    <th>绑定通道</th>
+                    <th>最近采集</th>
+                    <th>诊断说明</th>
+                    {{if .CanModify}}<th class="collection-action-header">操作</th>{{end}}
+                </tr>
+            </thead>
+            <tbody>
+            {{range .Rows}}
+                <tr>
+                    <td>
+                        <div class="table-primary" title="{{.Config.MasterName}}">{{.Config.MasterName}}</div>
+                        <div class="table-secondary" title="{{.Config.MasterID}}">{{.Config.MasterID}}</div>
+                    </td>
+                    <td class="wrap-text">
+                        <div class="table-primary" title="{{.TargetValue}}">{{.TargetValue}}</div>
+                    </td>
+                    <td>
+                        {{if .HasStatus}}
+                        <div class="object-time-stack">
+                            <span>成功：{{formatDiagnosisTime (diagnosisLastSuccessTime .Status.Diagnosis .Status.LastSuccessTimeMS)}}</span>
+                            <span>失败：{{formatDiagnosisTime (diagnosisLastErrorTime .Status.Diagnosis .Status.LastFailureTimeMS)}}</span>
+                        </div>
+                        {{else}}-{{end}}
+                    </td>
+                    <td class="wrap-text collection-diagnosis-cell">
+                        <div class="object-diagnosis collection-diagnosis-content">
+                            <span class="{{masterDiagnosticClass .}}" title="{{masterDiagnosticText .}}">{{masterDiagnosticText .}}</span>
+                            {{if .Config.Enabled}}{{if .HasStatus}}{{with diagnosisSuggestionText .Status.Diagnosis}}
+                            <small>建议：{{.}}</small>
+                            {{end}}{{end}}{{end}}
+                        </div>
+                    </td>
+                    {{if $page.CanModify}}<td class="collection-action-cell">
+                        <div class="table-actions collection-row-actions master-actions master-row-actions">
+                            <button
+                                type="button"
+                                class="btn btn-small"
+                                data-master-editor-open
+                                data-mode="edit"
+                                data-save-url="/api/masters/{{.Config.MasterID}}"
+                                data-method="PUT"
+                                data-master-id="{{.Config.MasterID}}"
+                                data-master-name="{{.Config.MasterName}}"
+                                data-enabled="{{if .Config.Enabled}}true{{else}}false{{end}}"
+                                data-protocol="{{.Config.Protocol}}"
+                                data-channel-id="{{.Config.ChannelID}}"
+                                data-target-address="{{.Config.TargetAddress}}"
+                                data-poll-interval-ms="{{.Config.PollIntervalMS}}"
+                                data-response-timeout-ms="{{.Config.ResponseTimeoutMS}}"
+                                data-retry-count="{{.Config.RetryCount}}"
+                                data-remark="{{.Config.Remark}}"
+                                data-device-template="{{.Config.DeviceTemplate}}"
+                                data-block-start-register="{{.Config.BlockStartRegister}}"
+                                data-device-count="{{.Config.DeviceCount}}">
+                                编辑
+                            </button>
+                            <button
+                                type="button"
+                                class="btn btn-small btn-danger master-delete-action"
+                                data-master-delete
+                                data-delete-url="/api/masters/{{.Config.MasterID}}"
+                                data-master-name="{{.Config.MasterName}}">
+                                删除
+                            </button>
+                        </div>
+                    </td>{{end}}
+                </tr>
+            {{else}}
+                <tr>
+                    <td colspan="{{if .CanModify}}5{{else}}4{{end}}" class="empty-cell">
+                        <div class="collect-manage-empty">
+                            {{if not .CanModify}}
+                            <strong>暂无可查看的采集主站</strong>
+                            <span class="empty-secondary">当前没有可展示的主站配置。</span>
+                            {{else}}
+                            {{if eq (len .Channels) 0}}
+                            <strong>尚未配置采集通道</strong>
+                            <span class="empty-secondary">请先完成通道配置，再新增主站。</span>
+                            {{else}}
+                            <strong>暂无主站</strong>
+                            <span class="empty-secondary">请新增主站并选择设备类型。</span>
+                            {{end}}
+                            {{end}}
+                        </div>
+                    </td>
+                </tr>
+            {{end}}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+{{if .CanModify}}
+<div class="channel-modal" id="master-editor-modal" aria-hidden="true">
+    <div class="channel-modal-backdrop" data-master-modal-close></div>
+    <div class="channel-modal-dialog tech-frame" role="dialog" aria-modal="true" aria-labelledby="master-editor-title">
+        <div class="channel-modal-header">
+            <div>
+                <h3 id="master-editor-title" data-master-modal-title>新增主站</h3>
+            </div>
+            <button type="button" class="btn btn-secondary modal-close-btn" data-master-modal-close>关闭</button>
+        </div>
+        <form class="master-config-form modal-form-shell" data-submit-label="保存主站">
+            <div class="channel-modal-body modal-form-scroll">
+                <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                <div class="channel-section-grid">
+                    <section class="form-section">
+                        <div class="form-section-head">
+                            <div>
+                                <h4>基础信息</h4>
+                            </div>
+                        </div>
+                        <div class="channel-form-grid">
+                            <label class="form-field">
+                                <span class="field-label">主站 ID</span>
+                                <input type="text" name="master_id" placeholder="例如：master_01" required>
+                            </label>
+                            <label class="form-field">
+                                <span class="field-label">主站名称</span>
+                                <input type="text" name="master_name" data-keyboard="text-cn" placeholder="请输入主站名称" required>
+                            </label>
+                            <label class="form-field">
+                                <span class="field-label">协议类型</span>
+                                <select name="protocol" data-master-protocol>
+                                    <option value="modbus_rtu" selected>Modbus RTU</option>
+                                    <option value="modbus_tcp">Modbus TCP</option>
+                                </select>
+                            </label>
+                            <label class="form-field form-field-checkbox">
+                                <span class="field-label">启用状态</span>
+                                <span class="checkbox-label"><input type="checkbox" name="enabled" checked>保存后立即启用该主站</span>
+                            </label>
+                        </div>
+                    </section>
+
+                    <section class="form-section">
+                        <div class="form-section-head">
+                            <div>
+                                <h4>通信参数</h4>
+                            </div>
+                        </div>
+                        <div class="channel-form-grid">
+                            <label class="form-field" data-master-channel-field>
+                                <span class="field-label">关联通道</span>
+                                <select name="channel_id" data-master-channel-select>
+                                    <option value="">请选择通道</option>
+                                    {{range $page.Channels}}
+                                        <option
+                                            value="{{.ChannelID}}"
+                                            data-channel-type="{{.ChannelType}}"
+                                            data-channel-disabled="{{if .Enabled}}false{{else}}true{{end}}"
+                                            data-channel-fault="{{if .IsFault}}true{{else}}false{{end}}">
+                                            {{.DisplayLabel}}
+                                        </option>
+                                    {{else}}
+                                        <option value="" disabled>当前没有可用通道，请先在采集管理的通道配置中新增或启用通道</option>
+                                    {{end}}
+                                </select>
+                            </label>
+                            <label class="form-field">
+                                <span class="field-label">Unit ID / 从站地址</span>
+                                <input type="number" name="target_address" min="1" max="247" value="1" required>
+                            </label>
+                            <label class="form-field">
+                                <span class="field-label">轮询周期 (ms)</span>
+                                <input type="number" name="poll_interval_ms" min="1" max="3600000" value="1000" required>
+                            </label>
+                            <label class="form-field">
+                                <span class="field-label">超时 (ms)</span>
+                                <input type="number" name="response_timeout_ms" min="1" max="60000" value="1000" required>
+                            </label>
+                            <label class="form-field">
+                                <span class="field-label">重试次数</span>
+                                <input type="number" name="retry_count" min="0" max="10" value="2" required>
+                            </label>
+                        </div>
+                        <div class="channel-form-notes hidden" data-master-channel-warning></div>
+                    </section>
+
+                    <section class="form-section form-section-span-2">
+                        <div class="form-section-head">
+                            <div>
+                                <h4>设备部署</h4>
+                            </div>
+                        </div>
+                        <div class="channel-form-grid">
+                            <div class="form-field form-field-wide">
+                                <span class="field-label">设备类型</span>
+                                <div class="master-template-picker" data-master-template-picker>
+                                    <input type="hidden" name="device_template" required>
+                                    <button type="button" class="master-template-picker-trigger" data-master-template-trigger aria-haspopup="listbox" aria-expanded="false">
+                                        <span><strong data-master-template-selected-name>请选择设备类型</strong><small data-master-template-selected-id>支持名称或模板 ID 搜索</small></span><span class="master-template-picker-caret" aria-hidden="true">▾</span>
+                                    </button>
+                                    <div class="master-template-picker-panel" data-master-template-panel hidden>
+                                        <div class="master-template-picker-search"><input type="search" data-keyboard="text" data-master-template-search placeholder="搜索名称、模板 ID 或型号" autocomplete="off"></div>
+                                        <div class="master-template-picker-filters" role="group" aria-label="设备类型分类">
+                                            <button type="button" class="is-active" data-master-template-filter="all" aria-pressed="true">全部</button>
+                                            <button type="button" data-master-template-filter="builtin" aria-pressed="false">内置设备类型</button>
+                                            <button type="button" data-master-template-filter="custom" aria-pressed="false">自定义设备类型</button>
+                                        </div>
+                                        <div class="master-template-picker-meta" data-master-template-count></div>
+                                        <div class="master-template-picker-options" data-master-template-options role="listbox" tabindex="-1">
+                                    {{range $page.DeviceTemplates}}
+                                        <button type="button" class="master-template-picker-option" role="option"
+                                            data-template-id="{{.ID}}"
+                                            data-default-start-register="{{.DefaultStart}}"
+                                            data-read-block-count="{{len .ReadBlocks}}"
+                                            data-read-function-codes="{{range .ReadBlocks}}{{.FunctionCode}},{{end}}"
+                                            data-device-address-stride="{{.DeviceAddressStride}}"
+                                            data-template-name="{{.DisplayName}}"
+                                            data-template-kind="{{if .Builtin}}builtin{{else}}custom{{end}}"
+                                            aria-selected="false"><span><strong>{{.DisplayName}}</strong><small>{{.ID}}</small></span><em>{{if .Builtin}}内置{{else}}自定义{{end}}</em></button>
+                                    {{end}}
+                                        </div>
+                                        <div class="master-template-picker-empty" data-master-template-empty hidden>未找到符合条件的设备类型</div>
+                                    </div>
+                                </div>
+                                <output class="master-template-function-code master-template-protocol-summary" data-master-template-summary>请选择设备类型查看读取协议摘要。</output>
+                            </div>
+                            <label class="form-field">
+                                <span class="field-label">首台设备基地址</span>
+                                <input type="number" name="block_start_register" min="0" max="65535" value="0" required>
+                            </label>
+                            <label class="form-field">
+                                <span class="field-label">设备数量</span>
+                                <input type="number" name="device_count" min="1" max="256" step="1" value="1" placeholder="请输入实际接入的设备数量" required>
+                            </label>
+                        </div>
+                        <div class="channel-form-notes" data-master-address-preview>设备 1 基地址：0</div>
+                    </section>
+                </div>
+
+            </div>
+            <footer class="template-editor-footer modal-form-footer">
+                <span></span>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" data-master-modal-close>取消</button>
+                    <button type="submit" class="btn btn-primary" data-master-submit-button>保存主站</button>
+                </div>
+            </footer>
+        </form>
+    </div>
+</div>
+{{end}}
+{{end}}

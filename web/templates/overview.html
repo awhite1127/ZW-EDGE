@@ -1,0 +1,164 @@
+{{define "content"}}
+{{/* 系统概览首屏：服务端快照负责首次渲染，前端只刷新各运行指标卡片。 */}}
+<section class="overview-dashboard page-viewport-root">
+    <div class="overview-three-grid">
+        <section class="overview-block overview-block-runtime" data-overview-diagnosis data-refresh-url="/api/system/overview-snapshot" {{if .RuntimeSnapshotAvailable}}data-initial-snapshot="{{jsonAttr .RuntimeSnapshot}}"{{end}}>
+            <div class="overview-block-head">
+                <div>
+                    <h2>系统健康与北向状态</h2>
+                    <p class="panel-subtitle">软件版本：<strong>{{if .ConfigState.Available}}{{defaultText .ConfigSummary.ProjectVersion}}{{else}}暂不可用{{end}}</strong></p>
+                </div>
+                {{if .BackendReachable}}
+                    <span id="overview-diagnosis-badge" class="{{.DiagnosisCard.StateClass}}">{{.DiagnosisCard.StateText}}</span>
+                {{else}}
+                    <span id="overview-diagnosis-badge" class="status-bad">后端不可达</span>
+                {{end}}
+            </div>
+
+            <div id="overview-diagnosis-state-card" class="overview-diagnosis-state {{if not .BackendReachable}}is-issue{{else if .DiagnosisCard.HasIssue}}is-issue{{else}}is-normal{{end}}">
+                <span>健康状态</span>
+                <strong id="overview-diagnosis-state">
+                    {{if .BackendReachable}}
+                        {{.DiagnosisCard.StateText}}
+                    {{else}}
+                        后端不可达
+                    {{end}}
+                </strong>
+                <p id="overview-diagnosis-note">
+                    {{if .BackendReachable}}
+                        {{.DiagnosisCard.Note}}
+                    {{else}}
+                        {{defaultText .ErrorMessage}}
+                    {{end}}
+                </p>
+            </div>
+
+            <section class="overview-diagnosis-section overview-polling-summary">
+                <div class="overview-diagnosis-section-title">采集轮询与数据质量</div>
+                <div class="overview-health-list">
+                    <div><span>轮询服务</span><strong id="overview-polling-state" class="status-neutral">状态未知</strong></div>
+                    <div><span>最近完成周期</span><strong id="overview-polling-cycle">--</strong></div>
+                    <div><span>最近数据质量</span><strong id="overview-polling-quality">--</strong></div>
+                    <div><span>当前错误</span><strong id="overview-current-error">暂无当前错误</strong></div>
+                </div>
+            </section>
+
+            <div class="overview-diagnosis-section overview-mqtt-summary" data-overview-mqtt-summary {{if not (and .RuntimeSnapshotAvailable .RuntimeSnapshot.MqttRuntime.Enabled)}}hidden{{end}}>
+                <div class="overview-diagnosis-section-title">MQTT 北向状态</div>
+                <div class="overview-diagnosis-list">
+                    <div>
+                        <span>连接状态</span>
+                        <strong id="overview-mqtt-state">状态暂不可用</strong>
+                    </div>
+                    <div>
+                        <span>服务器地址</span>
+                        <strong id="overview-mqtt-broker">--</strong>
+                    </div>
+                    <div>
+                        <span>最近错误</span>
+                        <strong id="overview-mqtt-last-error">--</strong>
+                    </div>
+                </div>
+            </div>
+
+            <div class="overview-diagnosis-section overview-modbus-summary" data-overview-modbus-summary {{if not (and .RuntimeSnapshotAvailable .RuntimeSnapshot.ModbusServerRuntime.ConfiguredEnabled)}}hidden{{end}}>
+                <div class="overview-diagnosis-section-title">Modbus 北向状态</div>
+                <div class="overview-diagnosis-list">
+                    <div><span>服务状态</span><strong id="overview-modbus-state">状态暂不可用</strong></div>
+                    <div><span>监听端口</span><strong id="overview-modbus-port">--</strong></div>
+                    <div><span>当前连接</span><strong id="overview-modbus-connections">0</strong></div>
+                    <div><span>最近错误</span><strong id="overview-modbus-error">--</strong></div>
+                </div>
+            </div>
+
+        </section>
+
+        <section class="overview-block overview-block-health">
+            <div class="overview-block-head">
+                <div>
+                    <h2>采集对象概览</h2>
+                </div>
+                <span class="{{.CollectionObject.StatusClass}}">{{.CollectionObject.StatusText}}</span>
+            </div>
+
+            <div class="collection-object-metrics">
+                {{range .CollectionObject.Metrics}}
+                <div class="collection-object-metric collection-object-metric-{{.State}}">
+                    <span>{{.Label}}</span>
+                    <strong>{{.Value}}</strong>
+                </div>
+                {{end}}
+            </div>
+
+            <div class="collection-master-list">
+                <div class="collection-master-list-title">主站分组</div>
+                {{range .CollectionObject.MasterSummaries}}
+                <div class="collection-master-item">
+                    <div class="collection-master-main">
+                        <strong>{{.Name}}</strong>
+                        <span>{{.AddressText}}</span>
+                    </div>
+                    <div class="collection-master-meta">
+                        <span>{{.TemplateName}}</span>
+                        <span>设备 {{.DeviceCount}} 台</span>
+                        <span>寄存器 {{.RegisterRange}}</span>
+                    </div>
+                    <div class="collection-master-status collection-master-status-{{.StatusState}}">
+                        <strong>{{.StatusText}}</strong>
+                        <span>正常 {{.NormalDevices}} / 异常 {{.ErrorDevices}}</span>
+                    </div>
+                </div>
+                {{else}}
+                <div class="collection-object-empty">{{.CollectionObject.EmptyText}}</div>
+                {{end}}
+                {{if .CollectionObject.MoreMasterCount}}
+                <div class="collection-master-more">另有 {{.CollectionObject.MoreMasterCount}} 个主站</div>
+                {{end}}
+            </div>
+        </section>
+
+        <section class="overview-block overview-block-events">
+            <div class="overview-block-head">
+                <div>
+                    <h2>事件与处置</h2>
+                </div>
+                <a class="btn btn-small" href="/events">查看事件告警</a>
+            </div>
+
+            <div class="overview-current-alarms">
+                <h3>当前告警</h3>
+                {{range .ActiveAlarmPreview}}
+                <div class="overview-alarm-item">
+                    <span class="event-level-badge {{eventLevelClass .Level}}">{{alarmLevelText .Level}}</span>
+                    <div class="overview-alarm-copy">
+                        <strong>{{defaultText .DeviceName}} · {{defaultText .PointName}}</strong>
+                        <span>当前 {{formatAlarmValue .CurrentValue .Precision .Unit}} · {{alarmDirectionText .Direction}} {{formatAlarmValue .ThresholdValue .Precision .Unit}}</span>
+                    </div>
+                </div>
+                {{else}}
+                <div class="empty-block"><strong>当前暂无报警设备</strong><span class="empty-secondary">系统未检测到需要立即处理的告警。</span></div>
+                {{end}}
+                {{if .RemainingAlarmCount}}<div class="overview-alarm-more">另有 {{.RemainingAlarmCount}} 个告警</div>{{end}}
+            </div>
+
+            <div class="overview-event-list overview-recent-events">
+                <h3>最近事件</h3>
+                {{range .RecentEvents}}
+                <div class="overview-event-item">
+                    <span class="event-time">{{formatTimestamp .TimestampMS}}</span>
+                    <span class="{{eventLevelClass .Level}}">{{eventLevelText .Level}}</span>
+                    <span class="event-source">{{eventTypeText .}}</span>
+                    <strong class="overview-event-detail" title="{{eventSummaryText .}}">{{eventSummaryText .}}</strong>
+                </div>
+                {{else}}
+                <div class="empty-block">
+                    <strong>暂无历史事件记录</strong>
+                    <span class="empty-secondary">新的运行事件将在这里显示。</span>
+                </div>
+                {{end}}
+            </div>
+
+        </section>
+    </div>
+</section>
+{{end}}

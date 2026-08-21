@@ -1,0 +1,76 @@
+{{define "content"}}
+<header class="mqtt-page-nav subpage-header subpage-toolbar-compact">
+    <div class="subpage-header-top">
+        <a class="subpage-back-button" href="/settings" aria-label="返回系统设置" title="返回系统设置"><span class="subpage-back-icon" aria-hidden="true"><svg class="ui-icon"><use href="#icon-back"></use></svg></span><span>返回系统设置</span></a>
+        <div class="module-tools">
+            <button class="btn btn-primary btn-small" type="submit" form="mqtt-settings-form" {{if not .MqttState.Available}}disabled{{end}}>保存 MQTT 配置</button>
+        </div>
+    </div>
+</header>
+
+<section class="mqtt-settings-page page-fill page-viewport-root" data-settings-runtime-page data-settings-runtime-url="/api/settings/runtime-status">
+    {{if .MqttState.ErrorMessage}}<span hidden data-initial-toast data-toast-type="error" data-toast-message="MQTT 配置暂时无法获取：{{.MqttState.ErrorMessage}}"></span>{{end}}
+    {{if .MqttRuntimeState.ErrorMessage}}<span hidden data-initial-toast data-toast-type="error" data-toast-message="MQTT 运行状态暂时无法获取：{{.MqttRuntimeState.ErrorMessage}}"></span>{{end}}
+
+    <div class="mqtt-content-container">
+        <section class="panel tech-frame mqtt-runtime-panel">
+            <div class="module-head settings-card-head">
+                <div class="module-copy"><h2>运行状态</h2><p class="panel-subtitle">状态随系统设置运行态自动刷新。</p></div>
+            </div>
+            <div class="network-status-grid mqtt-status-grid">
+                <div class="network-status-item"><span>当前状态</span><strong data-mqtt-runtime-state class="{{mqttStateClass .MqttRuntime.State}}">{{mqttStateText .MqttRuntime.State}}</strong></div>
+                <div class="network-status-item"><span>最近发布结果</span><strong data-mqtt-runtime-last-publish-result>{{if not .MqttRuntimeState.Available}}状态暂不可用{{else if not .Mqtt.Enabled}}未启用{{else if .MqttRuntime.LastPublishErrorMessage}}发布失败：{{.MqttRuntime.LastPublishErrorMessage}}{{else if .MqttRuntime.LastPublishTimeMS}}发布成功，{{.MqttRuntime.LastPublishPayloadBytes}} 字节{{if .MqttRuntime.LastPublishSequence}}，序号 {{.MqttRuntime.LastPublishSequence}}{{end}}{{else}}暂无发布记录{{end}}</strong></div>
+            </div>
+        </section>
+
+        <div class="mqtt-settings-scroll">
+            <form id="mqtt-settings-form" class="settings-form mqtt-settings-form" method="post" action="/settings/mqtt">
+                <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                <input type="hidden" name="redirect" value="/settings/mqtt">
+
+                <div class="mqtt-config-sections">
+                <section class="panel tech-frame mqtt-config-section">
+                    <div class="module-copy"><h2>连接与身份</h2><p class="panel-subtitle">配置 Broker、客户端身份与登录凭据。</p></div>
+                    <div class="mqtt-toggle-row">
+                        <label class="mqtt-toggle-item"><span class="field-label">启用 MQTT 北向发布</span><input name="enabled" type="checkbox" {{if .Mqtt.Enabled}}checked{{end}} {{if not .MqttState.Available}}disabled{{end}}></label>
+                        <label class="mqtt-toggle-item"><span class="field-label">保留在线状态</span><input name="retain_status" type="checkbox" {{if .Mqtt.RetainStatus}}checked{{end}} {{if not .MqttState.Available}}disabled{{end}}></label>
+                        <label class="mqtt-toggle-item mqtt-toggle-danger"><span class="field-label">清空已保存密码</span><input name="clear_password" type="checkbox" {{if not .MqttState.Available}}disabled{{end}}></label>
+                    </div>
+                    <div class="mqtt-page-field-grid">
+                        <label class="form-field"><span class="field-label">Broker 地址</span><input name="broker_host" type="text" maxlength="255" value="{{.Mqtt.BrokerHost}}" placeholder="192.168.1.100" {{if not .MqttState.Available}}disabled{{end}}></label>
+                        <label class="form-field"><span class="field-label">Broker 端口</span><input name="broker_port" type="number" min="1" max="65535" required value="{{.Mqtt.BrokerPort}}" {{if not .MqttState.Available}}disabled{{end}}></label>
+                        <label class="form-field"><span class="field-label">Client ID</span><input name="client_id" type="text" maxlength="128" value="{{.Mqtt.ClientID}}" placeholder="留空由后端校验或推导" {{if not .MqttState.Available}}disabled{{end}}></label>
+                        <label class="form-field"><span class="field-label">用户名</span><input name="username" type="text" maxlength="128" value="{{.Mqtt.Username}}" autocomplete="username" {{if not .MqttState.Available}}disabled{{end}}></label>
+                        <label class="form-field mqtt-field-wide"><span class="field-label">密码</span><input name="password" type="password" data-keyboard="password" maxlength="256" value="" autocomplete="new-password" placeholder="留空保留旧密码" {{if not .MqttState.Available}}disabled{{end}}></label>
+                    </div>
+                </section>
+
+                <section class="panel tech-frame mqtt-config-section">
+                    <div class="module-copy"><h2>发布参数</h2><p class="panel-subtitle">定义节点主题、发布频率与连接保活。</p></div>
+                    <div class="mqtt-page-field-grid">
+                        <label class="form-field"><span class="field-label">节点 ID</span><input name="node_id" type="text" maxlength="128" required value="{{.Mqtt.NodeID}}" placeholder="edge-controller" {{if not .MqttState.Available}}disabled{{end}}></label>
+                        <label class="form-field"><span class="field-label">Topic 前缀</span><input name="topic_prefix" type="text" maxlength="128" required value="{{.Mqtt.TopicPrefix}}" placeholder="edge-controller" {{if not .MqttState.Available}}disabled{{end}}></label>
+                        <label class="form-field"><span class="field-label">发布周期（秒）</span><input name="publish_interval_seconds" type="number" min="1" max="3600" required value="{{.Mqtt.PublishIntervalSeconds}}" {{if not .MqttState.Available}}disabled{{end}}></label>
+                        <label class="form-field"><span class="field-label">QoS</span><select name="qos" {{if not .MqttState.Available}}disabled{{end}}><option value="0" {{if eq .Mqtt.QoS 0}}selected{{end}}>0</option><option value="1" {{if eq .Mqtt.QoS 1}}selected{{end}}>1</option></select></label>
+                        <label class="form-field"><span class="field-label">Keep Alive（秒）</span><input name="keep_alive_seconds" type="number" min="10" max="300" required value="{{.Mqtt.KeepAliveSeconds}}" {{if not .MqttState.Available}}disabled{{end}}></label>
+                    </div>
+                </section>
+
+                <section class="panel tech-frame mqtt-config-section mqtt-tls-section">
+                    <div class="module-copy"><h2>TLS 与证书</h2><p class="panel-subtitle">证书文件由设备本地路径加载，不在浏览器中上传。</p></div>
+                    <div class="mqtt-toggle-row mqtt-tls-toggle-row">
+                        <label class="mqtt-toggle-item"><span class="field-label">启用 TLS</span><input name="tls_enabled" type="checkbox" {{if .Mqtt.TLSEnabled}}checked{{end}} {{if not .MqttState.Available}}disabled{{end}}></label>
+                        <label class="mqtt-toggle-item mqtt-toggle-danger"><span class="field-label">跳过证书主机名校验</span><input name="tls_insecure" type="checkbox" {{if .Mqtt.TLSInsecure}}checked{{end}} {{if not .MqttState.Available}}disabled{{end}}></label>
+                    </div>
+                    <div class="mqtt-page-field-grid mqtt-certificate-grid">
+                        <label class="form-field"><span class="field-label">CA 证书路径</span><input name="tls_ca_file" type="text" maxlength="255" value="{{.Mqtt.TLSCAFile}}" placeholder="/etc/edge-controller/certs/ca.crt" {{if not .MqttState.Available}}disabled{{end}}></label>
+                        <label class="form-field"><span class="field-label">客户端证书路径</span><input name="tls_client_cert_file" type="text" maxlength="255" value="{{.Mqtt.TLSClientCertFile}}" placeholder="/etc/edge-controller/certs/client.crt" {{if not .MqttState.Available}}disabled{{end}}></label>
+                        <label class="form-field"><span class="field-label">客户端私钥路径</span><input name="tls_client_key_file" type="text" maxlength="255" value="{{.Mqtt.TLSClientKeyFile}}" placeholder="/etc/edge-controller/certs/client.key" {{if not .MqttState.Available}}disabled{{end}}></label>
+                    </div>
+                </section>
+                </div>
+            </form>
+        </div>
+    </div>
+</section>
+{{end}}
