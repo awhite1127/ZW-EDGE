@@ -660,6 +660,34 @@ type ServiceEvent struct {
 	OccurrenceCount  uint64          `json:"occurrence_count"`
 }
 
+// EventHistoryQuery 是历史事件页传给后端的筛选与分页条件。
+type EventHistoryQuery struct {
+	Level     string `json:"level,omitempty"`
+	Source    string `json:"source,omitempty"`
+	TimeRange string `json:"time_range,omitempty"`
+	Search    string `json:"search,omitempty"`
+	Page      int    `json:"page"`
+	PageSize  int    `json:"page_size"`
+}
+
+type EventLevelStats struct {
+	Error   int `json:"error"`
+	Warning int `json:"warning"`
+	Info    int `json:"info"`
+}
+
+type EventSourceStat struct {
+	Source string `json:"source"`
+	Count  int    `json:"count"`
+}
+
+type EventHistoryResult struct {
+	Rows        []ServiceEvent    `json:"rows"`
+	Total       int               `json:"total"`
+	LevelStats  EventLevelStats   `json:"level_stats"`
+	SourceStats []EventSourceStat `json:"source_stats"`
+}
+
 // EventExportQuery 是历史事件 CSV 导出时传给后端的分页筛选条件。
 type EventExportQuery struct {
 	Level     string `json:"level,omitempty"`

@@ -12,6 +12,7 @@ TOOLCHAIN_FILE="${TOOLCHAIN_FILE:-${PROJECT_ROOT}/backend/toolchain-arm64-rk3562
 ARM64_DEPS_ROOT="${ARM64_DEPS_ROOT:-/home/wu/dl/arm64-deps}"
 RK3562_TOOLCHAIN_ROOT="${RK3562_TOOLCHAIN_ROOT:-/home/wu/sdk/kickpi-rk356x/download/rk356x-linux/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu}"
 BUILD_JOBS="${BUILD_JOBS:-1}"
+EDGE_RELEASE_ENABLE_LTO="${EDGE_RELEASE_ENABLE_LTO:-0}"
 READELF_BIN="${READELF_BIN:-}"
 RUNTIME_RPATH='$ORIGIN/../lib'
 LOG_FILE=""
@@ -358,6 +359,10 @@ main()
     case "${BUILD_JOBS}" in
         ''|*[!0-9]*|0) die "BUILD_JOBS 必须是正整数，当前值：${BUILD_JOBS}" ;;
     esac
+    case "${EDGE_RELEASE_ENABLE_LTO}" in
+        0|1) ;;
+        *) die "EDGE_RELEASE_ENABLE_LTO 必须为 0 或 1，当前值：${EDGE_RELEASE_ENABLE_LTO}" ;;
+    esac
     [ -f "${TOOLCHAIN_FILE}" ] || die "找不到 RK3562 ARM64 toolchain 文件：${TOOLCHAIN_FILE}"
     [ -n "${BUILD_DIR}" ] && [ "${BUILD_DIR}" != "/" ] || die "BUILD_DIR 不能为根目录"
 
@@ -371,8 +376,19 @@ main()
     detect_readelf
     validate_private_dependencies
 
+    ipo_enabled=OFF
+    lto_tool_arguments=("-DRK3562_ENABLE_LTO_TOOLS:BOOL=OFF")
+    if [ "${EDGE_RELEASE_ENABLE_LTO}" = 1 ]; then
+        gcc_ar="${RK3562_TOOLCHAIN_ROOT}/bin/aarch64-none-linux-gnu-gcc-ar"
+        gcc_ranlib="${RK3562_TOOLCHAIN_ROOT}/bin/aarch64-none-linux-gnu-gcc-ranlib"
+        [ -x "${gcc_ar}" ] || die "启用 LTO 但缺少 gcc-ar：${gcc_ar}"
+        [ -x "${gcc_ranlib}" ] || die "启用 LTO 但缺少 gcc-ranlib：${gcc_ranlib}"
+        ipo_enabled=ON
+        lto_tool_arguments=("-DRK3562_ENABLE_LTO_TOOLS:BOOL=ON")
+    fi
+
     log "配置 Release 构建：build=${BUILD_DIR}；jobs=${BUILD_JOBS}；toolchain=${TOOLCHAIN_FILE}"
-    log "默认关闭 IPO/LTO；Release flags=-O2 -DNDEBUG；RPATH/RUNPATH=${RUNTIME_RPATH}"
+    log "IPO/LTO=${ipo_enabled}；Release flags=-O2 -DNDEBUG；RPATH/RUNPATH=${RUNTIME_RPATH}"
     cmake \
         -S "${PROJECT_ROOT}/backend" \
         -B "${BUILD_DIR}" \
@@ -382,7 +398,7 @@ main()
         -DMOSQUITTO_LIBRARY:FILEPATH="${MOSQUITTO_LIBRARY}" \
         "-DPACKAGE_VERSION:STRING=${PACKAGE_VERSION}" \
         -DCMAKE_BUILD_TYPE:STRING=Release \
-        -DCMAKE_INTERPROCEDURAL_OPTIMIZATION:BOOL=OFF \
+        "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION:BOOL=${ipo_enabled}" \
         -DCMAKE_C_FLAGS_RELEASE:STRING='-O2 -DNDEBUG' \
         -DCMAKE_CXX_FLAGS_RELEASE:STRING='-O2 -DNDEBUG' \
         "-DCMAKE_EXE_LINKER_FLAGS:STRING=-Wl,-rpath-link,${DEPS_ROOT_REAL}/lib" \
@@ -390,6 +406,7 @@ main()
         "-DCMAKE_INSTALL_RPATH:STRING=${RUNTIME_RPATH}" \
         -DCMAKE_BUILD_WITH_INSTALL_RPATH:BOOL=ON \
         -DCMAKE_INSTALL_RPATH_USE_LINK_PATH:BOOL=OFF \
+        "${lto_tool_arguments[@]}" \
         2>&1 | tee -a "${LOG_FILE}"
 
     validate_cmake_selection

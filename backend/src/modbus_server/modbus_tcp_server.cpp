@@ -92,6 +92,9 @@ struct ClientSession {
     TimestampMs connected_at_ms{0};
     TimestampMs last_activity_at_ms{0};
     std::chrono::steady_clock::time_point last_activity_steady{};
+    // 对端关闭写方向后仍可从本端读取响应；EOF 只停止继续收包，待完整 ADU 处理且
+    // send_buffer 排空后才关闭连接。
+    bool read_eof{false};
 };
 
 }  // namespace
@@ -482,7 +485,7 @@ void ModbusTcpServer::io_thread_entry()
             poll_fds.push_back({wakeup_read_fd_, POLLIN, 0});
             poll_fds.push_back({listen_fd, POLLIN, 0});
             for (const auto& client : clients) {
-                short events = POLLIN;
+                short events = client.read_eof ? 0 : POLLIN;
                 if (client.send_offset < client.send_buffer.size()) events |= POLLOUT;
                 poll_fds.push_back({client.fd, events, 0});
             }
@@ -561,14 +564,16 @@ void ModbusTcpServer::io_thread_entry()
                     return item.fd == fd;
                 });
                 if (found == clients.end()) continue;
-                if ((revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
-                    close_client(fd, "Socket 错误或对端关闭");
+                if ((revents & (POLLERR | POLLNVAL)) != 0) {
+                    close_client(fd, "Socket 错误");
                     continue;
                 }
 
                 bool close_requested = false;
                 std::string close_reason;
-                if ((revents & POLLIN) != 0) {
+                // POLLHUP 可能与尚未读取的数据同时出现，也可能表示对端仅关闭写方向。
+                // 两种情况都先 drain recv，再解析完整 ADU，不能在看到 HUP 时直接丢包。
+                if (!found->read_eof && (revents & (POLLIN | POLLHUP)) != 0) {
                     std::uint8_t input[2048];
                     for (;;) {
                         const auto received = ::recv(fd, input, sizeof(input), 0);
@@ -586,8 +591,7 @@ void ModbusTcpServer::io_thread_entry()
                             continue;
                         }
                         if (received == 0) {
-                            close_requested = true;
-                            close_reason = "客户端主动断开";
+                            found->read_eof = true;
                         } else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
                             close_requested = true;
                             close_reason = socket_error("接收失败");
@@ -597,7 +601,8 @@ void ModbusTcpServer::io_thread_entry()
                     }
 
                     std::size_t consumed = 0;
-                    while (!close_requested && found->receive_buffer.size() - consumed >= kMbapHeaderSize) {
+                    while (!close_requested &&
+                           found->receive_buffer.size() - consumed >= kMbapHeaderSize) {
                         const auto* request = found->receive_buffer.data() + consumed;
                         const auto protocol_id = read_u16_be(request + 2);
                         const auto length = static_cast<std::size_t>(read_u16_be(request + 4));
@@ -623,7 +628,7 @@ void ModbusTcpServer::io_thread_entry()
                 }
 
                 if (!close_requested && found->send_offset < found->send_buffer.size() &&
-                    (revents & (POLLIN | POLLOUT)) != 0) {
+                    (revents & (POLLIN | POLLOUT | POLLHUP)) != 0) {
                     while (found->send_offset < found->send_buffer.size()) {
                         const auto* data = found->send_buffer.data() + found->send_offset;
                         const auto remaining = found->send_buffer.size() - found->send_offset;
@@ -645,7 +650,12 @@ void ModbusTcpServer::io_thread_entry()
                         found->send_offset = 0;
                     }
                 }
-                if (close_requested) close_client(fd, close_reason);
+                if (close_requested) {
+                    close_client(fd, close_reason);
+                } else if (found->read_eof &&
+                           found->send_offset == found->send_buffer.size()) {
+                    close_client(fd, "客户端写方向已关闭，响应已发送完成");
+                }
             }
 
             // 回收超过空闲时限的客户端连接。

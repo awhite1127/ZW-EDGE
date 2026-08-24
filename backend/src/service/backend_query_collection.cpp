@@ -338,13 +338,11 @@ RealtimeViewSnapshot BackendService::get_realtime_view_snapshot() const
     std::shared_lock<std::shared_mutex> lock(service_mutex_);
 
     // 实时页需要“配置清单 + 最新运行态”同时存在，才能展示未采集、离线和正常设备的完整列表。
-    RealtimeViewSnapshot snapshot;
+    auto snapshot = data_store_.get_realtime_page_snapshot();
     snapshot.device_template_generation = device_template_registry_generation();
     snapshot.devices = system_config_.devices;
     snapshot.channels = system_config_.channels;
     snapshot.masters = system_config_.master_nodes;
-    snapshot.system_status = data_store_.get_system_status();
-    snapshot.device_realtime_snapshots = data_store_.get_all_device_realtime_snapshots();
     return snapshot;
 }
 

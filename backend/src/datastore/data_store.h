@@ -56,6 +56,8 @@ public:
     std::vector<DeviceRealtimeSnapshot> get_all_device_realtime_snapshots() const;
     // 在一次共享锁内构造 MQTT 所需的轻量实时快照，避免复制无关系统列表和设备点位状态。
     RealtimeViewSnapshot get_mqtt_realtime_snapshot() const;
+    // 在一次共享锁内构造 Web 实时页运行态；设备健康状态不重复携带 points。
+    RealtimeViewSnapshot get_realtime_page_snapshot() const;
     // 按主站获取设备实时数据快照。
     std::vector<DeviceRealtimeSnapshot> get_device_realtime_snapshots_by_master(const MasterNodeId& master_id) const;
 

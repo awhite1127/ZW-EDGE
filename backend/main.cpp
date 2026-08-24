@@ -1,5 +1,6 @@
 // 后端进程入口只负责启动 Application 并返回退出码，生命周期细节由应用装配层管理。
 #include "app/application.h"
+#include "channel/bounded_address_resolver.h"
 #include "common/logger.h"
 #include "interface/ipc_server.h"
 #include "maintenance/admin_recovery.h"
@@ -25,6 +26,14 @@ int main(int argc, char** argv)
 {
     try {
         if (argc > 1) {
+#if defined(__linux__)
+            if (argc == 4 &&
+                std::string(argv[1]) ==
+                    edge_controller::channel_internal::kAddressResolverHelperArgument) {
+                edge_controller::channel_internal::run_address_resolver_helper(
+                    argv[2], argv[3]);
+            }
+#endif
             if (argc == 2 && std::string(argv[1]) == "--ipc-health-check") {
                 std::string error_message;
                 const auto status = edge_controller::BackendIpcServer::probe(

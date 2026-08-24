@@ -119,16 +119,46 @@ func pagePermission(path string) string {
 	return metadata.AnyPermissions[0]
 }
 
+var apiGETPermissionMux = func() *http.ServeMux {
+	mux := http.NewServeMux()
+	for _, spec := range apiGETRoutes {
+		mux.HandleFunc(spec.pattern, func(http.ResponseWriter, *http.Request) {})
+	}
+	return mux
+}()
+
+func apiGETRouteForRequest(r *http.Request) (*apiGETRouteSpec, bool) {
+	if r == nil || r.Method != http.MethodGet || !strings.HasPrefix(r.URL.Path, "/api/") {
+		return nil, false
+	}
+	_, pattern := apiGETPermissionMux.Handler(r)
+	if pattern == "" {
+		return nil, false
+	}
+	for index := range apiGETRoutes {
+		if apiGETRoutes[index].pattern == pattern {
+			return &apiGETRoutes[index], true
+		}
+	}
+	return nil, false
+}
+
+// apiGETPermissions 使用与实际路由相同的清单匹配只读 API。
+// 返回 declared=false 表示路由没有权限声明，authMiddleware 会默认拒绝。
+func apiGETPermissions(r *http.Request) (permissions []string, declared bool) {
+	spec, declared := apiGETRouteForRequest(r)
+	if !declared {
+		return nil, false
+	}
+	return spec.anyPermissions, true
+}
+
 // requestPermission 返回接口请求要求的权限。
 func requestPermission(r *http.Request) string {
 	path := r.URL.Path
 	method := r.Method
 	if method == http.MethodGet {
 		switch {
-		case strings.HasPrefix(path, "/api/application-update/"):
-			return permissionManageApplicationUpdate
-		case path == "/api/modbus-server/exportable-points" || path == "/api/modbus-server/mappings":
-			return permissionManageModbusMappings
 		case path == "/history/export.csv":
 			return permissionViewHistory
 		case path == "/events/export.csv":
@@ -137,10 +167,6 @@ func requestPermission(r *http.Request) string {
 			return permissionExportDiagnostics
 		case path == "/settings/config/export":
 			return permissionImportExportConfig
-		case path == "/api/system/serial-ports" || path == "/api/channels" || path == "/api/masters":
-			return permissionManageCollection
-		case strings.HasPrefix(path, "/api/channels/") && strings.HasSuffix(path, "/communication-traces"):
-			return permissionManageCollection
 		}
 		return ""
 	}
@@ -192,20 +218,4 @@ func requestPermission(r *http.Request) string {
 		return permissionManageUsers
 	}
 	return ""
-}
-
-// requestAnyPermissions 返回当前请求可接受的任一权限集合。
-func requestAnyPermissions(r *http.Request) []string {
-	if r.Method == http.MethodGet && (r.URL.Path == "/api/modbus-server/page-snapshot" ||
-		r.URL.Path == "/api/modbus-server/runtime-status") {
-		return []string{permissionManageModbusServer, permissionManageModbusMappings}
-	}
-	if r.Method == http.MethodGet && r.URL.Path == "/api/settings/runtime-status" {
-		return []string{
-			permissionManageSystemSettings,
-			permissionManageNetwork,
-			permissionManageMqtt,
-		}
-	}
-	return nil
 }

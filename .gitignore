@@ -17,8 +17,8 @@ Testing/
 .gocache/
 go-build*/
 *.test
-edge-controller
-edge-web
+/edge-controller
+/web/edge-web
 
 # Release, packaging and staging outputs
 dist/

@@ -257,7 +257,7 @@ build_controller()
     BUILD_JOBS="${BUILD_JOBS}" \
     ARM64_DEPS_ROOT="${ARM64_DEPS_ROOT}" \
     RK3562_TOOLCHAIN_ROOT="${RK3562_TOOLCHAIN_ROOT}" \
-        "${CONTROLLER_BUILD_SCRIPT}" 2>&1 | tee -a "${RELEASE_LOG}"
+        bash "${CONTROLLER_BUILD_SCRIPT}" 2>&1 | tee -a "${RELEASE_LOG}"
 }
 
 build_web()
@@ -277,15 +277,17 @@ build_web()
 
 generate_package()
 {
+    local debug_symbol_dir="${DIST_DIR}/debug-symbols/${PACKAGE_VERSION}"
     rm -f -- "${ARCHIVE_PATH}"
     PACKAGE_VERSION="${PACKAGE_VERSION}" \
     BUILD_DIR="${BUILD_DIR}" \
     ARM64_DEPS_ROOT="${ARM64_DEPS_ROOT}" \
     RK3562_TOOLCHAIN_ROOT="${RK3562_TOOLCHAIN_ROOT}" \
     DIST_DIR="${RELEASE_DIR}" \
+    DEBUG_SYMBOL_DIR="${debug_symbol_dir}" \
     EDGE_RELEASE_SIGNING_KEY="${EDGE_RELEASE_SIGNING_KEY}" \
     EDGE_RELEASE_SIGNING_KEY_ID="${EDGE_RELEASE_SIGNING_KEY_ID}" \
-        "${PACKAGE_SCRIPT}" 2>&1 | tee -a "${RELEASE_LOG}"
+        bash "${PACKAGE_SCRIPT}" 2>&1 | tee -a "${RELEASE_LOG}"
     [ -f "${ARCHIVE_PATH}" ] || die "打包脚本未生成预期发布包：${ARCHIVE_PATH}"
 }
 
@@ -486,13 +488,13 @@ main()
     stage 1 环境检查
     [ -d "${PROJECT_ROOT}/backend" ] && [ -f "${PROJECT_ROOT}/web/go.mod" ] ||
         die "项目目录不完整：${PROJECT_ROOT}"
-    [ -x "${CONTROLLER_BUILD_SCRIPT}" ] || die "构建脚本不存在或不可执行：${CONTROLLER_BUILD_SCRIPT}"
-    [ -x "${PACKAGE_SCRIPT}" ] || die "打包脚本不存在或不可执行：${PACKAGE_SCRIPT}"
+    [ -f "${CONTROLLER_BUILD_SCRIPT}" ] || die "构建脚本不存在：${CONTROLLER_BUILD_SCRIPT}"
+    [ -f "${PACKAGE_SCRIPT}" ] || die "打包脚本不存在：${PACKAGE_SCRIPT}"
     [ -f "${DEPLOY_SCRIPT}" ] || die "板端部署脚本不存在：${DEPLOY_SCRIPT}"
     [ -f "${DISPLAY_DEPLOY_SCRIPT}" ] || die "显示版部署脚本不存在：${DISPLAY_DEPLOY_SCRIPT}"
     [ -f "${DISPLAY_ASSET_DIR}/start-edge-kiosk.sh" ] || die "Kiosk 启动脚本不存在"
     [ -f "${DISPLAY_ASSET_DIR}/edge-kiosk.desktop" ] || die "Kiosk autostart 文件不存在"
-    for command_name in date go file readlink sed head grep awk stat sha256sum tar mktemp tee rm mkdir cp chmod basename find sort wc cat python3; do
+    for command_name in bash date go file readlink sed head grep awk stat sha256sum tar mktemp tee rm mkdir cp chmod basename find sort wc cat python3; do
         need_cmd "${command_name}"
     done
     if [ -n "${EDGE_RELEASE_SIGNING_KEY}" ]; then

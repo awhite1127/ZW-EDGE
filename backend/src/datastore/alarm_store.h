@@ -13,6 +13,13 @@ struct sqlite3;
 
 namespace edge_controller {
 
+class ConfigImportTransaction;
+
+struct AlarmRuntimeStateKey {
+    DeviceId device_id;
+    std::string point_key;
+};
+
 class AlarmStore {
 public:
     // 销毁 AlarmStore 实例并释放相关资源。
@@ -43,6 +50,11 @@ public:
     StatusCode list_active_runtime_states(std::vector<AlarmRuntimeState>* states, std::string* error_message = nullptr) const;
     // 删除指定点位的报警运行状态。
     StatusCode delete_runtime_state(const DeviceId& device_id, const std::string& point_key, std::string* error_message = nullptr);
+    // 在单个 SQLite 事务中批量写入/删除运行态，同类操作复用同一 prepared statement。
+    StatusCode apply_runtime_state_batch(
+        const std::vector<AlarmRuntimeState>& upserts,
+        const std::vector<AlarmRuntimeStateKey>& deletes,
+        std::string* error_message = nullptr);
     // 清空全部告警运行状态。
     StatusCode clear_runtime_states(std::string* error_message = nullptr);
     // 在单个 SQLite 事务内完整替换告警运行状态，用于配置导入失败后的无损恢复。
@@ -51,6 +63,11 @@ public:
         std::string* error_message = nullptr);
 
 private:
+    // 在调用方已开启的共享事务内完整替换导入携带的告警规则和运行状态。
+    StatusCode replace_alarm_data_for_import_locked(
+        const std::vector<AlarmRule>& rules,
+        const std::vector<AlarmRuntimeState>& states,
+        std::string* error_message);
     // 在持锁状态下执行。
     StatusCode execute_locked(const char* sql, std::string* error_message) const;
     // 在持锁状态下初始化数据库结构。
@@ -59,6 +76,8 @@ private:
     bool available_locked(std::string* error_message) const;
     // 在持锁状态下关闭。
     void close_locked();
+
+    friend class ConfigImportTransaction;
 
     // 告警规则和运行态共用数据库连接，各公开操作以本锁包围完整事务。
     mutable std::mutex mutex_;

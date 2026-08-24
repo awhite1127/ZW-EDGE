@@ -183,7 +183,7 @@ func (s *Server) handleSettingsDeviceTypesPage(w http.ResponseWriter, r *http.Re
 	ctx, cancel := s.console.WithTimeout(r.Context())
 	defer cancel()
 
-	pageData := s.console.LoadSettings(ctx, parseTemplatePageQuery(r))
+	pageData := s.console.LoadDeviceTemplateSettings(ctx, parseTemplatePageQuery(r))
 	pageData.BasePageData = mergeBasePageData(
 		s.basePageData(
 			"设备类型管理",
@@ -207,13 +207,12 @@ func (s *Server) handleDeviceTemplateEditorPage(w http.ResponseWriter, r *http.R
 	if returnPage < 1 {
 		returnPage = 1
 	}
-	settings := s.console.LoadSettings(ctx, returnPage)
+	templateID := strings.TrimSpace(r.URL.Query().Get("id"))
+	settings, definition, found, err := s.console.LoadDeviceTemplateEditorSettings(ctx, returnPage, templateID)
 	data := model.DeviceTemplateEditorPageData{
 		ReturnPath: "/settings/device-types?template_page=" + strconv.Itoa(settings.DeviceTemplatePagination.Page),
 	}
-	templateID := strings.TrimSpace(r.URL.Query().Get("id"))
 	if templateID != "" {
-		definition, found, err := s.console.GetEditableDeviceTemplate(ctx, templateID)
 		if err != nil {
 			http.Error(w, "设备类型暂时无法读取", http.StatusServiceUnavailable)
 			return
@@ -396,7 +395,7 @@ func (s *Server) handleSettingsMqttPage(w http.ResponseWriter, r *http.Request) 
 	ctx, cancel := s.console.WithTimeout(r.Context())
 	defer cancel()
 
-	pageData := s.console.LoadSettings(ctx, 1)
+	pageData := s.console.LoadMqttSettingsPage(ctx)
 	pageData.BasePageData = mergeBasePageData(
 		s.basePageData(
 			"MQTT 北向配置",

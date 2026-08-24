@@ -71,6 +71,25 @@ bool valid_runtime_state(const AlarmRuntimeState& state, std::string* error)
     return set_error(error, "告警运行状态只能是 normal、pending 或 active", StatusCode::kInvalidArgument), false;
 }
 
+// 按 alarm_runtime_states 写入语句的稳定列顺序绑定一条运行态。
+bool bind_runtime_state(sqlite3_stmt* statement, const AlarmRuntimeState& state)
+{
+    return bind_text(statement, 1, state.device_id) &&
+           bind_text(statement, 2, state.point_key) &&
+           bind_text(statement, 3, state.state) &&
+           bind_text(statement, 4, state.direction) &&
+           sqlite3_bind_double(statement, 5, state.current_value) == SQLITE_OK &&
+           sqlite3_bind_double(statement, 6, state.threshold_value) == SQLITE_OK &&
+           sqlite3_bind_int64(statement, 7, state.consecutive_trigger_count) == SQLITE_OK &&
+           sqlite3_bind_int64(statement, 8, state.consecutive_recovery_count) == SQLITE_OK &&
+           sqlite3_bind_int64(statement, 9, static_cast<sqlite3_int64>(state.active_since_ms)) == SQLITE_OK &&
+           sqlite3_bind_int64(statement, 10, static_cast<sqlite3_int64>(state.last_evaluated_at_ms)) == SQLITE_OK &&
+           sqlite3_bind_int(statement, 11, state.acknowledged ? 1 : 0) == SQLITE_OK &&
+           sqlite3_bind_int64(statement, 12, static_cast<sqlite3_int64>(state.acknowledged_at_ms)) == SQLITE_OK &&
+           bind_text(statement, 13, state.acknowledged_by) &&
+           sqlite3_bind_int64(statement, 14, static_cast<sqlite3_int64>(state.updated_at_ms)) == SQLITE_OK;
+}
+
 // 读取规则。
 AlarmRule read_rule(sqlite3_stmt* s)
 {
@@ -189,6 +208,88 @@ StatusCode AlarmStore::delete_rule(const DeviceId& d,const std::string& p,std::s
 // 清空规则。
 StatusCode AlarmStore::clear_rules(std::string* e){std::lock_guard<std::mutex> l(mutex_);return execute_locked("DELETE FROM alarm_rules;",e);}
 StatusCode AlarmStore::delete_runtime_state(const DeviceId& d,const std::string& p,std::string* e){std::lock_guard<std::mutex> l(mutex_);if(!available_locked(e))return StatusCode::kInvalidState;Statement s(database_,"DELETE FROM alarm_runtime_states WHERE device_id=? AND point_key=?;");if(!s.ok()||!bind_text(s.get(),1,d)||!bind_text(s.get(),2,p)||sqlite3_step(s.get())!=SQLITE_DONE)return set_error(e,"删除告警状态失败: "+db_error(database_));return StatusCode::kOk;}
+
+// 原子应用一批运行态变更；任一绑定、执行或提交失败都回滚全部写入。
+StatusCode AlarmStore::apply_runtime_state_batch(
+    const std::vector<AlarmRuntimeState>& upserts,
+    const std::vector<AlarmRuntimeStateKey>& deletes,
+    std::string* error)
+{
+    for (const auto& state : upserts) {
+        if (!valid_runtime_state(state, error)) return StatusCode::kInvalidArgument;
+    }
+    for (const auto& key : deletes) {
+        if (key.device_id.empty() || key.point_key.empty()) {
+            return set_error(error, "批量删除告警运行态的键不能为空", StatusCode::kInvalidArgument);
+        }
+    }
+    if (upserts.empty() && deletes.empty()) return StatusCode::kOk;
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!available_locked(error)) return StatusCode::kInvalidState;
+    auto status = execute_locked("BEGIN IMMEDIATE;", error);
+    if (!is_ok(status)) return status;
+
+    const auto rollback_with_error = [&](const std::string& message, StatusCode code = StatusCode::kIoError) {
+        (void)execute_locked("ROLLBACK;", nullptr);
+        return set_error(error, message, code);
+    };
+
+    if (!upserts.empty()) {
+        Statement statement(
+            database_,
+            "INSERT INTO alarm_runtime_states(device_id,point_key,state,direction,current_value,"
+            "threshold_value,consecutive_trigger_count,consecutive_recovery_count,active_since_ms,"
+            "last_evaluated_at_ms,acknowledged,acknowledged_at_ms,acknowledged_by,updated_at_ms) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(device_id,point_key) DO UPDATE SET state=excluded.state,"
+            "direction=excluded.direction,current_value=excluded.current_value,"
+            "threshold_value=excluded.threshold_value,"
+            "consecutive_trigger_count=excluded.consecutive_trigger_count,"
+            "consecutive_recovery_count=excluded.consecutive_recovery_count,"
+            "active_since_ms=excluded.active_since_ms,"
+            "last_evaluated_at_ms=excluded.last_evaluated_at_ms,"
+            "acknowledged=excluded.acknowledged,"
+            "acknowledged_at_ms=excluded.acknowledged_at_ms,"
+            "acknowledged_by=excluded.acknowledged_by,updated_at_ms=excluded.updated_at_ms;");
+        if (!statement.ok()) {
+            return rollback_with_error("准备批量写入告警运行态失败: " + db_error(database_));
+        }
+        for (const auto& state : upserts) {
+            if (sqlite3_reset(statement.get()) != SQLITE_OK ||
+                sqlite3_clear_bindings(statement.get()) != SQLITE_OK ||
+                !bind_runtime_state(statement.get(), state) ||
+                sqlite3_step(statement.get()) != SQLITE_DONE) {
+                return rollback_with_error("批量写入告警运行态失败: " + db_error(database_));
+            }
+        }
+    }
+
+    if (!deletes.empty()) {
+        Statement statement(
+            database_,
+            "DELETE FROM alarm_runtime_states WHERE device_id=? AND point_key=?;");
+        if (!statement.ok()) {
+            return rollback_with_error("准备批量删除告警运行态失败: " + db_error(database_));
+        }
+        for (const auto& key : deletes) {
+            if (sqlite3_reset(statement.get()) != SQLITE_OK ||
+                sqlite3_clear_bindings(statement.get()) != SQLITE_OK ||
+                !bind_text(statement.get(), 1, key.device_id) ||
+                !bind_text(statement.get(), 2, key.point_key) ||
+                sqlite3_step(statement.get()) != SQLITE_DONE) {
+                return rollback_with_error("批量删除告警运行态失败: " + db_error(database_));
+            }
+        }
+    }
+
+    status = execute_locked("COMMIT;", error);
+    if (!is_ok(status)) {
+        const auto message = error == nullptr ? std::string("提交告警运行态批处理失败") : *error;
+        return rollback_with_error(message);
+    }
+    return StatusCode::kOk;
+}
 // 清空全部告警运行状态。
 StatusCode AlarmStore::clear_runtime_states(std::string* e){std::lock_guard<std::mutex> l(mutex_);return execute_locked("DELETE FROM alarm_runtime_states;",e);}
 // 原子替换全部告警运行状态；任一状态非法或写入失败时保留替换前数据。
@@ -251,6 +352,79 @@ StatusCode AlarmStore::replace_runtime_states(
     if (!is_ok(status)) {
         const auto message = error == nullptr ? std::string("提交告警运行状态替换失败") : *error;
         return rollback_with_error(message);
+    }
+    return StatusCode::kOk;
+}
+
+// 在配置导入共享事务中替换规则及运行状态；事务边界由 ConfigImportTransaction 管理。
+StatusCode AlarmStore::replace_alarm_data_for_import_locked(
+    const std::vector<AlarmRule>& rules,
+    const std::vector<AlarmRuntimeState>& states,
+    std::string* error)
+{
+    for (const auto& rule : rules) {
+        if (!valid_rule(rule, error)) return StatusCode::kInvalidArgument;
+    }
+    for (const auto& state : states) {
+        if (!valid_runtime_state(state, error)) return StatusCode::kInvalidArgument;
+    }
+    if (!available_locked(error)) return StatusCode::kInvalidState;
+
+    auto status = execute_locked("DELETE FROM alarm_rules;", error);
+    if (!is_ok(status)) return status;
+    status = execute_locked("DELETE FROM alarm_runtime_states;", error);
+    if (!is_ok(status)) return status;
+
+    Statement rule_statement(
+        database_,
+        "INSERT INTO alarm_rules(device_id,point_key,enabled,high_enabled,high_threshold,"
+        "low_enabled,low_threshold,level,hysteresis,trigger_count,recovery_count,updated_at_ms) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?);");
+    if (!rule_statement.ok()) {
+        return set_error(error, "准备导入告警规则失败: " + db_error(database_));
+    }
+    for (const auto& rule : rules) {
+        sqlite3_reset(rule_statement.get());
+        sqlite3_clear_bindings(rule_statement.get());
+        const auto stored_high_threshold =
+            std::isfinite(rule.high_threshold) ? rule.high_threshold : 0.0;
+        const auto stored_low_threshold =
+            std::isfinite(rule.low_threshold) ? rule.low_threshold : 0.0;
+        const bool bound =
+            bind_text(rule_statement.get(), 1, rule.device_id) &&
+            bind_text(rule_statement.get(), 2, rule.point_key) &&
+            sqlite3_bind_int(rule_statement.get(), 3, rule.enabled ? 1 : 0) == SQLITE_OK &&
+            sqlite3_bind_int(rule_statement.get(), 4, rule.high_enabled ? 1 : 0) == SQLITE_OK &&
+            sqlite3_bind_double(rule_statement.get(), 5, stored_high_threshold) == SQLITE_OK &&
+            sqlite3_bind_int(rule_statement.get(), 6, rule.low_enabled ? 1 : 0) == SQLITE_OK &&
+            sqlite3_bind_double(rule_statement.get(), 7, stored_low_threshold) == SQLITE_OK &&
+            bind_text(rule_statement.get(), 8, rule.level) &&
+            sqlite3_bind_double(rule_statement.get(), 9, rule.hysteresis) == SQLITE_OK &&
+            sqlite3_bind_int64(rule_statement.get(), 10, rule.trigger_count) == SQLITE_OK &&
+            sqlite3_bind_int64(rule_statement.get(), 11, rule.recovery_count) == SQLITE_OK &&
+            sqlite3_bind_int64(
+                rule_statement.get(), 12, static_cast<sqlite3_int64>(rule.updated_at_ms)) == SQLITE_OK;
+        if (!bound || sqlite3_step(rule_statement.get()) != SQLITE_DONE) {
+            return set_error(error, "导入告警规则失败: " + db_error(database_));
+        }
+    }
+
+    Statement state_statement(
+        database_,
+        "INSERT INTO alarm_runtime_states(device_id,point_key,state,direction,current_value,"
+        "threshold_value,consecutive_trigger_count,consecutive_recovery_count,active_since_ms,"
+        "last_evaluated_at_ms,acknowledged,acknowledged_at_ms,acknowledged_by,updated_at_ms) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?);");
+    if (!state_statement.ok()) {
+        return set_error(error, "准备导入告警运行状态失败: " + db_error(database_));
+    }
+    for (const auto& state : states) {
+        sqlite3_reset(state_statement.get());
+        sqlite3_clear_bindings(state_statement.get());
+        if (!bind_runtime_state(state_statement.get(), state) ||
+            sqlite3_step(state_statement.get()) != SQLITE_DONE) {
+            return set_error(error, "导入告警运行状态失败: " + db_error(database_));
+        }
     }
     return StatusCode::kOk;
 }

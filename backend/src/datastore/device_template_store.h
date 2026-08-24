@@ -14,6 +14,8 @@ struct sqlite3;
 
 namespace edge_controller {
 
+class ConfigImportTransaction;
+
 class DeviceTemplateStore {
 public:
     // 销毁 DeviceTemplateStore 实例并释放相关资源。
@@ -96,6 +98,11 @@ private:
     StatusCode upsert_custom_template_locked(
         const DeviceTemplateDefinition& device_template,
         std::string* error_message);
+    // 在调用方已开启的共享事务内完整替换自定义设备类型，并返回待发布的完整模板快照。
+    StatusCode replace_custom_templates_for_import_locked(
+        const std::vector<DeviceTemplateDefinition>& device_templates,
+        std::vector<DeviceTemplateDefinition>* templates,
+        std::string* error_message);
     // 在当前事务内持久化字段的实时数据展示偏好。
     StatusCode persist_realtime_display_preferences_locked(
         const DeviceTemplateDefinition& device_template,
@@ -124,6 +131,8 @@ private:
     bool database_available_locked(std::string* error_message) const;
     // 在持锁状态下关闭数据库。
     void close_database_locked();
+
+    friend class ConfigImportTransaction;
 
     // 模板定义包含多张关联表，读写期间独占连接以避免观察到半套字段配置。
     mutable std::mutex mutex_;

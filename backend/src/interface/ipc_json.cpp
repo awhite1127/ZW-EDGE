@@ -646,6 +646,36 @@ nlohmann::json to_json(const ServiceEvent& event)
     };
 }
 
+// 将历史事件级别统计转换为 JSON。
+nlohmann::json to_json(const EventLevelStats& stats)
+{
+    return nlohmann::json{
+        {"error", stats.error},
+        {"warning", stats.warning},
+        {"info", stats.info},
+    };
+}
+
+// 将历史事件来源统计转换为 JSON。
+nlohmann::json to_json(const EventSourceStat& stat)
+{
+    return nlohmann::json{
+        {"source", stat.source},
+        {"count", stat.count},
+    };
+}
+
+// 将历史事件分页结果转换为 JSON。
+nlohmann::json to_json(const EventHistoryResult& result)
+{
+    return nlohmann::json{
+        {"rows", to_json_array(result.rows)},
+        {"total", result.total},
+        {"level_stats", to_json(result.level_stats)},
+        {"source_stats", to_json_array(result.source_stats)},
+    };
+}
+
 // 将模型对象转换为JSON。
 nlohmann::json to_json(const OverviewPageSnapshot& snapshot)
 {
@@ -1265,25 +1295,14 @@ nlohmann::json to_json(const SystemStatus& status)
 // 将模型对象转换为JSON。
 nlohmann::json to_json(const RealtimeViewSnapshot& snapshot)
 {
-    // device_realtime_snapshots 已携带完整点位。聚合响应中再把相同点位放进
-    // system_status.device_status_list 会让大拓扑报文近乎翻倍。状态对象保留
-    // 设备健康与诊断字段，Web 解码后按 device_id 从实时快照补回 points，
-    // 从而保持进程内模型兼容并显著降低 UDS 复制、序列化和瞬时内存占用。
-    auto system_status = to_json(snapshot.system_status);
-    auto& device_status_list = system_status["device_status_list"];
-    if (device_status_list.is_array()) {
-        for (auto& device_status : device_status_list) {
-            if (device_status.is_object()) {
-                device_status["points"] = nlohmann::json::array();
-            }
-        }
-    }
+    // DataStore 已在同一共享锁内生成不含 points 的设备健康投影，点位只通过
+    // device_realtime_snapshots 序列化一次，避免构造完整 JSON 后再清空数组。
     return nlohmann::json{
         {"device_template_generation", snapshot.device_template_generation},
         {"devices", to_json_array(snapshot.devices)},
         {"channels", to_json_array(snapshot.channels)},
         {"masters", to_json_array(snapshot.masters)},
-        {"system_status", std::move(system_status)},
+        {"system_status", to_json(snapshot.system_status)},
         {"device_realtime_snapshots", to_json_array(snapshot.device_realtime_snapshots)},
     };
 }

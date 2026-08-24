@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <climits>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <utility>
 
@@ -14,9 +15,12 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
+#include <spawn.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+extern char** environ;
 #endif
 
 namespace edge_controller::channel_internal {
@@ -129,6 +133,75 @@ bool write_all(int fd, const void* data, std::size_t size)
     }
     ::close(output_fd);
     _exit(write_ok ? 0 : 125);
+}
+
+int spawn_resolver_helper(
+    const std::string& host,
+    const std::string& service,
+    const int pipe_fds[2],
+    pid_t* child_pid)
+{
+    if (pipe_fds == nullptr || child_pid == nullptr) {
+        return EINVAL;
+    }
+
+    posix_spawn_file_actions_t actions{};
+    int status = ::posix_spawn_file_actions_init(&actions);
+    if (status != 0) {
+        return status;
+    }
+
+    // file actions 按顺序执行。先关闭父端读描述符，再把写端固定到 helper 协议描述符；
+    // 其它 controller 描述符依赖 CLOEXEC，并在 exec 后由 helper 再做一次防御性清理。
+    status = ::posix_spawn_file_actions_addclose(&actions, pipe_fds[0]);
+    if (status == 0) {
+        status = ::posix_spawn_file_actions_adddup2(
+            &actions, pipe_fds[1], kAddressResolverHelperOutputFd);
+    }
+    if (status == 0 && pipe_fds[1] != kAddressResolverHelperOutputFd) {
+        status = ::posix_spawn_file_actions_addclose(&actions, pipe_fds[1]);
+    }
+
+    posix_spawnattr_t attributes{};
+    bool attributes_initialized = false;
+    if (status == 0) {
+        status = ::posix_spawnattr_init(&attributes);
+        attributes_initialized = status == 0;
+    }
+    if (status == 0) {
+        status = ::posix_spawnattr_setpgroup(&attributes, 0);
+    }
+    if (status == 0) {
+        status = ::posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETPGROUP);
+    }
+
+    if (status == 0) {
+        const auto* configured_helper = std::getenv("EDGE_CONTROLLER_RESOLVER_HELPER");
+        const std::string executable = configured_helper != nullptr && configured_helper[0] != '\0'
+            ? configured_helper
+            : "/proc/self/exe";
+        std::string helper_argument = kAddressResolverHelperArgument;
+        char* arguments[] = {
+            const_cast<char*>(executable.c_str()),
+            helper_argument.data(),
+            const_cast<char*>(host.c_str()),
+            const_cast<char*>(service.c_str()),
+            nullptr,
+        };
+        status = ::posix_spawn(
+            child_pid,
+            executable.c_str(),
+            &actions,
+            &attributes,
+            arguments,
+            environ);
+    }
+
+    if (attributes_initialized) {
+        ::posix_spawnattr_destroy(&attributes);
+    }
+    ::posix_spawn_file_actions_destroy(&actions);
+    return status;
 }
 
 class ResolverChild final {
@@ -328,6 +401,18 @@ bool try_resolve_numeric_addresses(
 }
 
 }  // namespace
+
+[[noreturn]] void run_address_resolver_helper(
+    const std::string& host,
+    const std::string& service,
+    int output_fd)
+{
+    // 此入口只会在 posix_spawn/exec 后执行；此时已是单线程的新进程映像，可以安全
+    // 进入 libc/NSS。关闭意外继承的描述符，避免慢 DNS 阻碍主进程资源释放。
+    const int descriptor_limit = linux_child_process_internal::descriptor_limit_before_fork();
+    linux_child_process_internal::close_inherited_descriptors(output_fd, descriptor_limit);
+    run_resolver_child(output_fd, host, service, nullptr);
+}
 #endif
 
 AddressResolutionResult resolve_addresses_until(
@@ -385,33 +470,51 @@ AddressResolutionResult resolve_addresses_until(
         return result;
     }
 
-    int descriptor_limit = linux_child_process_internal::descriptor_limit_before_fork();
-    descriptor_limit = std::max(descriptor_limit, pipe_fds[1] + 1);
-
-    const pid_t child_pid = ::fork();
-    if (child_pid < 0) {
-        const int fork_error = errno;
-        ::close(pipe_fds[0]);
-        ::close(pipe_fds[1]);
-        result.status = StatusCode::kIoError;
-        result.error_message = "启动 DNS 解析子进程失败: " + std::string(std::strerror(fork_error));
-        return result;
-    }
-    if (child_pid == 0) {
-        ::close(pipe_fds[0]);
-        // fork 会复制 controller 的串口、socket、eventfd 和数据库 FD；解析子进程只保留
-        // 标准描述符及结果管道，避免阻塞 DNS 延迟主进程资源释放。
-        linux_child_process_internal::close_inherited_descriptors(
-            pipe_fds[1], descriptor_limit);
-        if (::setpgid(0, 0) != 0) {
+    pid_t child_pid = -1;
+    bool process_group_created = false;
+    if (resolver == nullptr) {
+        // 生产路径必须 exec 到全新的进程映像后再进入 getaddrinfo/NSS。posix_spawn
+        // 同时创建独立进程组，保留原有 deadline 到期时整体终止的语义。
+        const int spawn_error = spawn_resolver_helper(host, service, pipe_fds, &child_pid);
+        if (spawn_error != 0) {
+            ::close(pipe_fds[0]);
             ::close(pipe_fds[1]);
-            _exit(126);
+            result.status = StatusCode::kIoError;
+            result.error_message =
+                "启动 DNS 解析 helper 失败: " + std::string(std::strerror(spawn_error));
+            return result;
         }
-        run_resolver_child(pipe_fds[1], host, service, resolver);
+        process_group_created = true;
+    } else {
+        // 注入函数仅供进程隔离/取消测试使用，不能跨 exec 传递函数指针。正式调用方
+        // 始终走上面的 posix_spawn 路径。
+        int descriptor_limit = linux_child_process_internal::descriptor_limit_before_fork();
+        descriptor_limit = std::max(descriptor_limit, pipe_fds[1] + 1);
+        child_pid = ::fork();
+        if (child_pid < 0) {
+            const int fork_error = errno;
+            ::close(pipe_fds[0]);
+            ::close(pipe_fds[1]);
+            result.status = StatusCode::kIoError;
+            result.error_message =
+                "启动测试 DNS 解析子进程失败: " + std::string(std::strerror(fork_error));
+            return result;
+        }
+        if (child_pid == 0) {
+            ::close(pipe_fds[0]);
+            linux_child_process_internal::close_inherited_descriptors(
+                pipe_fds[1], descriptor_limit);
+            if (::setpgid(0, 0) != 0) {
+                ::close(pipe_fds[1]);
+                _exit(126);
+            }
+            run_resolver_child(pipe_fds[1], host, service, resolver);
+        }
     }
 
     ::close(pipe_fds[1]);
-    if (::setpgid(child_pid, child_pid) != 0 && errno != EACCES && errno != ESRCH) {
+    if (!process_group_created &&
+        ::setpgid(child_pid, child_pid) != 0 && errno != EACCES && errno != ESRCH) {
         const int group_error = errno;
         ResolverChild child(child_pid, pipe_fds[0]);
         child.close_output();

@@ -85,7 +85,64 @@ bool is_valid_realtime_snapshot(const DeviceRealtimeSnapshot& snapshot)
 {
     return snapshot.sample_time_ms > 0 &&
            (!snapshot.points.empty() ||
-            (snapshot.has_resistance && snapshot.resistance.sample_time_ms > 0));
+           (snapshot.has_resistance && snapshot.resistance.sample_time_ms > 0));
+}
+
+// 实时页面会从 DeviceRealtimeSnapshot 取得点位；健康投影只复制诊断与状态字段，
+// 避免同一批 PointValue 在 SystemStatus 中再次深拷贝。
+DeviceStatus build_device_health_status(const DeviceStatus& source)
+{
+    DeviceStatus result;
+    result.device_id = source.device_id;
+    result.device_name = source.device_name;
+    result.master_id = source.master_id;
+    result.template_id = source.template_id;
+    result.template_name = source.template_name;
+    result.online = source.online;
+    result.last_collect_success = source.last_collect_success;
+    result.communication_quality = source.communication_quality;
+    result.updated_at_ms = source.updated_at_ms;
+    result.last_success_time_ms = source.last_success_time_ms;
+    result.last_failure_time_ms = source.last_failure_time_ms;
+    result.has_resistance = source.has_resistance;
+    result.resistance_value = source.resistance_value;
+    result.diagnosis = source.diagnosis;
+    result.last_error_message = source.last_error_message;
+    return result;
+}
+
+SystemStatus build_realtime_system_status(const SystemStatus& source)
+{
+    SystemStatus result;
+    result.config_loaded = source.config_loaded;
+    result.service_ready = source.service_ready;
+    result.running = source.running;
+    result.polling_running = source.polling_running;
+    result.polling_state = source.polling_state;
+    result.started_at_ms = source.started_at_ms;
+    result.stopped_at_ms = source.stopped_at_ms;
+    result.last_heartbeat_ms = source.last_heartbeat_ms;
+    result.last_poll_cycle_started_at_ms = source.last_poll_cycle_started_at_ms;
+    result.last_poll_cycle_finished_at_ms = source.last_poll_cycle_finished_at_ms;
+    result.online_channel_count = source.online_channel_count;
+    result.online_master_count = source.online_master_count;
+    result.online_device_count = source.online_device_count;
+    result.last_poll_cycle_master_count = source.last_poll_cycle_master_count;
+    result.last_poll_cycle_success_master_count = source.last_poll_cycle_success_master_count;
+    result.last_poll_cycle_failed_master_count = source.last_poll_cycle_failed_master_count;
+    result.last_poll_cycle_success_device_count = source.last_poll_cycle_success_device_count;
+    result.last_poll_cycle_failed_device_count = source.last_poll_cycle_failed_device_count;
+    result.last_poll_cycle_has_error = source.last_poll_cycle_has_error;
+    result.diagnosis = source.diagnosis;
+    result.last_status_message = source.last_status_message;
+    result.last_poll_cycle_error_message = source.last_poll_cycle_error_message;
+    result.channel_status_list = source.channel_status_list;
+    result.master_status_list = source.master_status_list;
+    result.device_status_list.reserve(source.device_status_list.size());
+    for (const auto& status : source.device_status_list) {
+        result.device_status_list.push_back(build_device_health_status(status));
+    }
+    return result;
 }
 
 }  // namespace
@@ -463,6 +520,23 @@ std::vector<DeviceRealtimeSnapshot> DataStore::get_all_device_realtime_snapshots
         }
     }
     return snapshots;
+}
+
+// 在单次共享锁内生成 Web 实时页需要的健康投影和点位快照，保证二者来自同一采集时刻。
+RealtimeViewSnapshot DataStore::get_realtime_page_snapshot() const
+{
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+    RealtimeViewSnapshot snapshot;
+    snapshot.system_status = build_realtime_system_status(system_status_);
+    snapshot.device_realtime_snapshots.reserve(device_order_.size());
+    for (const auto& device_id : device_order_) {
+        const auto realtime = device_realtime_by_id_.find(device_id);
+        if (realtime != device_realtime_by_id_.end() &&
+            is_valid_realtime_snapshot(realtime->second)) {
+            snapshot.device_realtime_snapshots.push_back(realtime->second);
+        }
+    }
+    return snapshot;
 }
 
 // 在单次共享锁内读取 MQTT 发布需要的设备在线摘要和实时快照。

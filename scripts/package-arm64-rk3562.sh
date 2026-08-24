@@ -13,12 +13,29 @@ VERSION_RESOLVER="${SCRIPT_DIR}/product-version.py"
 PACKAGE_VERSION_OVERRIDE="${PACKAGE_VERSION:-}"
 PACKAGE_VERSION=""
 READELF_BIN="${READELF_BIN:-}"
+STRIP_BIN="${STRIP_BIN:-${RK3562_TOOLCHAIN_ROOT}/bin/aarch64-none-linux-gnu-strip}"
+OBJCOPY_BIN="${OBJCOPY_BIN:-${RK3562_TOOLCHAIN_ROOT}/bin/aarch64-none-linux-gnu-objcopy}"
+DEBUG_SYMBOL_DIR="${DEBUG_SYMBOL_DIR:-}"
 EDGE_RELEASE_SIGNING_KEY="${EDGE_RELEASE_SIGNING_KEY:-}"
 EDGE_RELEASE_SIGNING_KEY_ID="${EDGE_RELEASE_SIGNING_KEY_ID:-}"
 WORK_DIR=""
 SIGNING_PUBLIC_KEY=""
 SIGNING_KEY_ID=""
 SIGNATURE_ALGORITHM="none"
+DEBUG_SYMBOL_TEMP=""
+
+strip_controller_binary()
+{
+    controller_path="${PACKAGE_ROOT}/bin/edge-controller"
+    DEBUG_SYMBOL_TEMP="${WORK_DIR}/edge-controller.debug"
+
+    original_size="$(stat -c '%s' -- "${controller_path}")"
+    "${OBJCOPY_BIN}" --only-keep-debug "${controller_path}" "${DEBUG_SYMBOL_TEMP}"
+    "${STRIP_BIN}" --strip-unneeded "${controller_path}"
+    "${OBJCOPY_BIN}" --add-gnu-debuglink="${DEBUG_SYMBOL_TEMP}" "${controller_path}"
+    stripped_size="$(stat -c '%s' -- "${controller_path}")"
+    log "edge-controller 已分离调试符号并 strip：${original_size} -> ${stripped_size} bytes"
+}
 
 log()
 {
@@ -326,6 +343,8 @@ main()
     for command_name in date file readlink sed head grep find sort sha256sum tar cp ln chmod mkdir basename rm awk stat python3; do
         need_cmd "${command_name}"
     done
+    need_cmd "${STRIP_BIN}"
+    need_cmd "${OBJCOPY_BIN}"
     [ -f "${VERSION_RESOLVER}" ] || die "产品版本解析器不存在：${VERSION_RESOLVER}"
     PACKAGE_VERSION="$(python3 "${VERSION_RESOLVER}" \
         --repository-root "${PROJECT_ROOT}" \
@@ -351,6 +370,7 @@ main()
 
     log "复制正式运行文件"
     cp -- "${controller_source}" "${PACKAGE_ROOT}/bin/edge-controller"
+    strip_controller_binary
     copy_web
     copy_runtime_libraries
     cp -- "${SCRIPT_DIR}/rk3562/edge-controller.env.default" "${PACKAGE_ROOT}/config/edge-controller.env.default"
@@ -400,10 +420,16 @@ main()
     if tar -tzf "${output}" | grep -Ev '^edge-controller(/|$)' >/dev/null; then
         die "压缩包出现 edge-controller 之外的顶层目录"
     fi
+    debug_directory="${DEBUG_SYMBOL_DIR:-${DIST_DIR}/debug-symbols/${PACKAGE_VERSION}}"
+    debug_output="${debug_directory}/edge-controller.debug"
+    mkdir -p -- "${debug_directory}"
+    cp -- "${DEBUG_SYMBOL_TEMP}" "${debug_output}"
+    chmod 0644 -- "${debug_output}"
     archive_sha256="$(sha256sum -- "${output}" | awk '{print $1}')"
     archive_size="$(stat -c '%s' -- "${output}")"
     log "完成：${output}"
     log "大小：${archive_size} bytes；SHA-256：${archive_sha256}"
+    log "调试符号：${debug_output}；SHA-256：$(sha256sum -- "${debug_output}" | awk '{print $1}')"
 }
 
 main "$@"

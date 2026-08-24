@@ -52,6 +52,7 @@ StatusCode BackendService::apply_modbus_server_settings(
         normalized, "modbus_server_settings", error_message);
     if (!is_ok(validation)) return validation;
 
+    ModbusServerSettings previous_settings;
     std::shared_ptr<ModbusRegisterBank> bank;
     {
         std::unique_lock<std::shared_mutex> lock(service_mutex_);
@@ -59,18 +60,61 @@ StatusCode BackendService::apply_modbus_server_settings(
             if (error_message != nullptr) *error_message = "后端服务尚未初始化";
             return StatusCode::kInvalidState;
         }
+        previous_settings = modbus_server_settings_;
+        bank = modbus_register_bank_;
         const auto save_status = config_store_.save_modbus_server_settings(normalized, error_message);
         if (!is_ok(save_status)) return save_status;
-        modbus_server_settings_ = normalized;
-        bank = modbus_register_bank_;
     }
 
     // restart 内部可能 join I/O 线程，必须位于 BackendService::service_mutex_ 之外。
-    const auto runtime_status = modbus_tcp_server_.restart(normalized, std::move(bank), error_message);
-    if (!is_ok(runtime_status)) {
-        Logger::warn("应用 Modbus TCP Server 设置失败，南向采集保持运行");
+    std::string apply_error;
+    const auto runtime_status = modbus_tcp_server_.restart(normalized, bank, &apply_error);
+    if (is_ok(runtime_status)) {
+        std::unique_lock<std::shared_mutex> lock(service_mutex_);
+        modbus_server_settings_ = normalized;
+        if (error_message != nullptr) error_message->clear();
+        return StatusCode::kOk;
     }
-    return runtime_status;
+
+    // 新配置已经持久化，但监听切换失败。管理锁在整个补偿流程中保持持有，因而不会与
+    // 映射热重载、另一项 Server 设置或 shutdown 交错。旧内存设置尚未发布，只需恢复
+    // SQLite，并用同一 Bank 重启旧监听，即可把三层状态重新对齐。
+    std::string persistence_rollback_error;
+    const auto persistence_rollback_status = config_store_.save_modbus_server_settings(
+        previous_settings, &persistence_rollback_error);
+    std::string runtime_rollback_error;
+    const auto runtime_rollback_status = modbus_tcp_server_.restart(
+        previous_settings, bank, &runtime_rollback_error);
+    {
+        std::unique_lock<std::shared_mutex> lock(service_mutex_);
+        modbus_server_settings_ = previous_settings;
+    }
+
+    std::string message = "应用新 Modbus TCP Server 设置失败：" +
+        (apply_error.empty() ? std::string(to_string(runtime_status)) : apply_error);
+    if (is_ok(persistence_rollback_status) && is_ok(runtime_rollback_status)) {
+        message += "；已恢复原持久化配置和运行状态";
+        Logger::warn(message + "，南向采集保持运行");
+        if (error_message != nullptr) *error_message = message;
+        return runtime_status;
+    }
+    if (!is_ok(persistence_rollback_status)) {
+        message += "；恢复原持久化配置失败：" +
+            (persistence_rollback_error.empty()
+                 ? std::string(to_string(persistence_rollback_status))
+                 : persistence_rollback_error);
+    }
+    if (!is_ok(runtime_rollback_status)) {
+        message += "；恢复原运行状态失败：" +
+            (runtime_rollback_error.empty()
+                 ? std::string(to_string(runtime_rollback_status))
+                 : runtime_rollback_error);
+    }
+    Logger::error(message + "；Modbus Server 状态可能不一致，南向采集保持运行");
+    if (error_message != nullptr) *error_message = message;
+    return !is_ok(persistence_rollback_status)
+        ? persistence_rollback_status
+        : runtime_rollback_status;
 }
 
 // 重新加载 Modbus 寄存器映射。

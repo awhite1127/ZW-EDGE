@@ -24,6 +24,36 @@ struct EventExportQuery {
     std::uint32_t offset{0};
 };
 
+// 历史事件页的后端筛选与分页参数。
+struct EventHistoryQuery {
+    std::string level;
+    std::string source;
+    std::string time_range;
+    std::string search;
+    std::uint32_t page{1};
+    std::uint32_t page_size{10};
+};
+
+struct EventLevelStats {
+    std::uint64_t error{0};
+    std::uint64_t warning{0};
+    std::uint64_t info{0};
+};
+
+struct EventSourceStat {
+    std::string source;
+    std::uint64_t count{0};
+};
+
+struct EventHistoryResult {
+    std::vector<ServiceEvent> rows;
+    // total 只统计当前筛选条件的匹配数，用于准确分页。
+    std::uint64_t total{0};
+    // 级别与来源统计覆盖全部保留事件，保持页面统计卡与筛选项的现有语义。
+    EventLevelStats level_stats;
+    std::vector<EventSourceStat> source_stats;
+};
+
 class EventStore {
 public:
     // 销毁 EventStore 实例并释放相关资源。
@@ -35,6 +65,11 @@ public:
     StatusCode append(ServiceEvent event, std::string* error_message = nullptr, ServiceEvent* stored_event = nullptr);
     // 列出最近。
     StatusCode list_recent(std::size_t limit, std::vector<ServiceEvent>* events, std::string* error_message = nullptr) const;
+    // 按页面条件在数据库中筛选、分页并返回统计。
+    StatusCode query_history(
+        const EventHistoryQuery& query,
+        EventHistoryResult* result,
+        std::string* error_message = nullptr) const;
     // 导出事件。
     StatusCode export_events(
         const EventExportQuery& query,

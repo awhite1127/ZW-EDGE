@@ -1,0 +1,79 @@
+name: verify
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  source-integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Verify tracked release inputs
+        run: |
+          if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+            git diff --check HEAD^ HEAD
+          else
+            git show --check --format= HEAD
+          fi
+          git ls-files --error-unmatch \
+            web/cmd/edge-web/main.go \
+            backend/main.cpp \
+            scripts/release-arm64-rk3562.sh
+      - name: Validate release scripts
+        run: |
+          find scripts -type f -name '*.sh' -exec bash -n {} +
+          python3 -m py_compile \
+            scripts/product-version.py \
+            scripts/rk3562/update-manager.py
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: web/go.mod
+          cache: false
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Vet
+        run: go vet ./...
+      - name: Test with race detector
+        run: go test -race ./...
+      - name: Check JavaScript syntax
+        run: find static -type f -name '*.js' -exec node --check {} +
+      - name: Test JavaScript behavior
+        run: node --test
+      - name: Cross-build ARM64 release binary
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: arm64
+        run: go build -trimpath -ldflags='-s -w -X main.version=ci' -o /tmp/edge-web ./cmd/edge-web
+
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes cmake ninja-build libmosquitto-dev
+      - name: Configure
+        run: >-
+          cmake -S backend -B build-ci -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DEDGE_CONTROLLER_BUILD_TESTS=ON
+      - name: Build
+        run: cmake --build build-ci --parallel 2
+      - name: Run native tests
+        run: ctest --test-dir build-ci --output-on-failure

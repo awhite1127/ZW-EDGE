@@ -117,36 +117,49 @@ func loadPageTemplates(templateDir string) (map[string]*template.Template, error
 		"staticAssetVersion":       func() string { return staticAssetVersion },
 	}
 
-	// 每个页面独立解析模板集合，避免不同页面的同名定义相互覆盖。
+	// 公共布局只解析一次，再为每个页面 clone；页面自己的 content 定义仍完全隔离。
 	templates := make(map[string]*template.Template, len(pageFiles))
 	useEmbeddedTemplates := strings.TrimSpace(templateDir) == ""
 	layoutFile := filepath.Join(templateDir, "layout.html")
-	partialFiles := []string{
+	embeddedCollectionPartials := []string{
+		"templates/partials/channels_panel.html",
+		"templates/partials/masters_panel.html",
+		"templates/partials/devices_panel.html",
+	}
+	diskCollectionPartials := []string{
 		filepath.Join(templateDir, "partials", "channels_panel.html"),
 		filepath.Join(templateDir, "partials", "masters_panel.html"),
 		filepath.Join(templateDir, "partials", "devices_panel.html"),
 	}
 
+	base := template.New("layout").Funcs(funcMap)
+	var err error
+	if useEmbeddedTemplates {
+		base, err = base.ParseFS(webassets.TemplateFS, "templates/layout.html")
+	} else {
+		base, err = base.ParseFiles(layoutFile)
+	}
+	if err != nil {
+		return nil, err
+	}
+
 	for page, file := range pageFiles {
-		var (
-			tpl *template.Template
-			err error
-		)
+		tpl, err := base.Clone()
+		if err != nil {
+			return nil, err
+		}
 		if useEmbeddedTemplates {
-			tpl, err = template.New("layout").Funcs(funcMap).ParseFS(
-				webassets.TemplateFS,
-				"templates/layout.html",
-				"templates/"+file,
-				"templates/partials/channels_panel.html",
-				"templates/partials/masters_panel.html",
-				"templates/partials/devices_panel.html",
-			)
+			files := []string{"templates/" + file}
+			if page == "collection" {
+				files = append(files, embeddedCollectionPartials...)
+			}
+			tpl, err = tpl.ParseFS(webassets.TemplateFS, files...)
 		} else {
-			files := append([]string{
-				layoutFile,
-				filepath.Join(templateDir, file),
-			}, partialFiles...)
-			tpl, err = template.New("layout").Funcs(funcMap).ParseFiles(files...)
+			files := []string{filepath.Join(templateDir, file)}
+			if page == "collection" {
+				files = append(files, diskCollectionPartials...)
+			}
+			tpl, err = tpl.ParseFiles(files...)
 		}
 		if err != nil {
 			return nil, err

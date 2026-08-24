@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 
 #include "model/alarm.h"
+#include "datastore/event_store.h"
 #include "datastore/history_store.h"
 #include "model/channel_config.h"
 #include "model/channel_update.h"
@@ -118,6 +119,12 @@ nlohmann::json to_json(const ConfigExportBundle& bundle);
 nlohmann::json to_json(const ConfigImportResult& result);
 // 将模型对象转换为JSON。
 nlohmann::json to_json(const ServiceEvent& event);
+// 将历史事件级别统计转换为 JSON。
+nlohmann::json to_json(const EventLevelStats& stats);
+// 将历史事件来源统计转换为 JSON。
+nlohmann::json to_json(const EventSourceStat& stat);
+// 将历史事件分页结果转换为 JSON。
+nlohmann::json to_json(const EventHistoryResult& result);
 // 将模型对象转换为JSON。
 nlohmann::json to_json(const OverviewPageSnapshot& snapshot);
 // 将模型对象转换为JSON。

@@ -69,15 +69,18 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			http.Error(w, message, http.StatusForbidden)
 			return
 		}
-		if permissions := requestAnyPermissions(r); len(permissions) > 0 && !hasAnyPermission(session.Role, permissions...) {
-			const message = "当前账户无权执行此操作"
-			logSecurityRejection(r, "permission_denied")
-			if wantsJSON(r) || strings.HasPrefix(r.URL.Path, "/api/") {
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/") {
+			permissions, declared := apiGETPermissions(r)
+			if !declared || len(permissions) == 0 || !hasAnyPermission(session.Role, permissions...) {
+				const message = "当前账户无权执行此操作"
+				reason := "permission_denied"
+				if !declared {
+					reason = "permission_policy_missing"
+				}
+				logSecurityRejection(r, reason)
 				writeError(w, http.StatusForbidden, "forbidden", message)
 				return
 			}
-			http.Error(w, message, http.StatusForbidden)
-			return
 		}
 		if permission := requestPermission(r); permission != "" && !hasPermission(session.Role, permission) {
 			const message = "当前账户无权执行此操作"
@@ -184,10 +187,11 @@ func isPublicPath(r *http.Request) bool {
 	if strings.HasPrefix(r.URL.Path, "/static/") {
 		return true
 	}
+	if spec, ok := apiGETRouteForRequest(r); ok && spec.public {
+		return true
+	}
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/upgrade-wait":
-		return true
-	case r.Method == http.MethodGet && r.URL.Path == "/api/application-update/watch":
 		return true
 	case r.Method == http.MethodGet && r.URL.Path == "/login":
 		return true

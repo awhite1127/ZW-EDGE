@@ -3,8 +3,11 @@
 
 #pragma once
 
+#include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -78,6 +81,18 @@ struct HistoryExportQuery {
     std::uint32_t offset{0};
 };
 
+// 历史导出内部稳定游标。公开 IPC 仍使用 limit/offset；服务内跨批扫描使用该游标，
+// 避免清理或并发写入导致后续批次因 OFFSET 位移而重复/遗漏。
+struct HistoryExportCursor {
+    TimestampMs bucket_start_ms{0};
+    ChannelId channel_id;
+    MasterNodeId master_id;
+    DeviceId device_id;
+    std::string point_key;
+    std::string sample_period;
+    bool valid{false};
+};
+
 struct HistoryCleanupResult {
     std::uint64_t deleted_raw_10min_count{0};
     std::uint64_t deleted_hour_count{0};
@@ -119,6 +134,13 @@ public:
         const HistoryExportQuery& query,
         std::vector<HistoryRecord>* records,
         std::string* error_message = nullptr) const;
+    // 从稳定游标之后读取下一批；仅供服务内流式扫描，query.offset 在此接口中忽略。
+    StatusCode export_records_after(
+        const HistoryExportQuery& query,
+        const HistoryExportCursor* cursor,
+        std::vector<HistoryRecord>* records,
+        HistoryExportCursor* next_cursor,
+        std::string* error_message = nullptr) const;
     // 清理过期。
     StatusCode cleanup_expired(HistoryCleanupResult* result, std::string* error_message = nullptr);
     // 统计按周期。
@@ -131,10 +153,39 @@ public:
     std::string database_path() const;
 
 private:
+    friend struct HistoryStoreTestPeer;
+
+    static constexpr std::size_t kReadConnectionCount = 2;
+
+    struct ReadConnection {
+        mutable std::mutex mutex;
+        ::sqlite3* database{nullptr};
+        ~ReadConnection();
+    };
+
+    struct ReadLease {
+        std::unique_lock<std::mutex> lifecycle_lock;
+        std::shared_ptr<ReadConnection> connection;
+        std::unique_lock<std::mutex> connection_lock;
+        ::sqlite3* database{nullptr};
+    };
+
     // 打开历史 SQLite 数据库。
     StatusCode open_database_locked(const std::string& database_path, std::string* error_message);
+    // 为 WAL 文件打开小型 query_only 只读连接组；内存库保持单连接语义。
+    StatusCode open_read_connections_locked(std::string* error_message);
+    // 关闭全部只读连接。调用方必须持有主连接生命周期锁。
+    void close_read_connections_locked();
+    // 短暂持有主锁选择只读连接，随后仅持有该连接自己的锁。
+    StatusCode acquire_read_lease(ReadLease* lease, std::string* error_message) const;
     // 初始化历史表和索引结构。
     StatusCode initialize_schema_locked(std::string* error_message);
+    // 判断持久化聚合状态是否要求启动重建（缺失、版本变化或 dirty 都要求重建）。
+    StatusCode aggregate_rebuild_required_locked(bool* required, std::string* error_message) const;
+    // 在当前事务中原子写入聚合 dirty/clean 状态。
+    StatusCode set_aggregate_state_locked(bool dirty, TimestampMs now_ms, std::string* error_message);
+    // 只在 marker 要求时执行全窗口重建，成功提交时同步清理 dirty。
+    StatusCode rebuild_aggregates_if_needed_locked(TimestampMs now_ms, bool* rebuilt, std::string* error_message);
     // 根据当前基础样本刷新对应小时点和天点；聚合失败由调用方记录并在后续样本写入时重试。
     StatusCode refresh_aggregates_locked(
         const std::vector<HistoryRecord>& raw_records,
@@ -150,6 +201,14 @@ private:
         std::string* error_message);
     // 在持锁状态下重建近期聚合记录。
     StatusCode rebuild_recent_aggregates_locked(TimestampMs now_ms, std::string* error_message);
+    // 导出查询公共实现；cursor 非空且有效时采用 keyset，否则保留公开 OFFSET 语义。
+    StatusCode export_records_page(
+        const HistoryExportQuery& query,
+        const HistoryExportCursor* cursor,
+        bool use_offset,
+        std::vector<HistoryRecord>* records,
+        HistoryExportCursor* next_cursor,
+        std::string* error_message) const;
     // 清理超过保留周期的历史数据。
     StatusCode cleanup_expired_locked(TimestampMs now_ms, std::string* error_message, HistoryCleanupResult* result = nullptr);
     // 在当前数据库连接上执行 SQL。
@@ -163,9 +222,11 @@ private:
     // 事务结束失败后恢复 autocommit；无法可信恢复时重建当前连接。
     void recover_failed_transaction_locked(const std::string& original_error);
 
-    // 历史查询、批量写入和保留策略清理共享同一连接，事务全过程必须保持本锁。
+    // 主连接只负责写事务和生命周期；查询只短暂持本锁后转入独立只读连接。
     mutable std::mutex mutex_;
     ::sqlite3* database_{nullptr};
+    mutable std::array<std::shared_ptr<ReadConnection>, kReadConnectionCount> read_connections_{};
+    mutable std::size_t next_read_connection_{0};
     std::string database_path_;
     std::string last_error_message_;
     std::chrono::steady_clock::time_point last_cleanup_time_{};

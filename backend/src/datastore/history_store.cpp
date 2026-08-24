@@ -74,6 +74,8 @@ constexpr std::uint32_t kDefaultExportLimit = 500;
 constexpr std::uint32_t kMaxExportLimit = 1000;
 constexpr std::uint32_t kStartupAggregateBatchSize = 4096;
 constexpr int kCurrentHistoryDatabaseVersion = 1;
+constexpr int kCurrentAggregateStateVersion = 1;
+constexpr int kHistoryReadBusyTimeoutMs = 5000;
 constexpr auto kHistoryReopenFailureLogInterval = std::chrono::seconds(60);
 
 // 拼接错误信息。
@@ -260,6 +262,15 @@ std::string history_date_from_timestamp(TimestampMs timestamp_ms)
 }
 
 // 关闭数据库连接并释放存储资源；内部加锁保证析构安全。
+HistoryStore::ReadConnection::~ReadConnection()
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    if (database != nullptr) {
+        sqlite3_close(database);
+        database = nullptr;
+    }
+}
+
 HistoryStore::~HistoryStore()
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -407,8 +418,19 @@ StatusCode HistoryStore::upsert_records(const std::vector<HistoryRecord>& record
         const auto aggregate_status = refresh_aggregates_locked(
             accepted_records, now_ms, &error_message);
         if (!is_ok(aggregate_status)) {
-            // 聚合失败不回滚已接收的基础样本；下一次基础样本写入会再次刷新同一小时和当天。
-            Logger::error("历史趋势聚合刷新失败，将在后续采样重试：" + error_message);
+            // 基础样本仍可提交，但必须在同一事务中持久化 dirty；若 marker 也写失败，
+            // 回滚整批，不能留下普通重启会误判为 clean 的基础样本。
+            const auto aggregate_error = error_message;
+            std::string marker_error;
+            const auto marker_status = set_aggregate_state_locked(true, now_ms, &marker_error);
+            if (!is_ok(marker_status)) {
+                write_failed = true;
+                error_message = join_error(
+                    "历史聚合失败后写入重建标记失败",
+                    join_error(aggregate_error, marker_error));
+            } else {
+                Logger::error("历史趋势聚合刷新失败，已标记为启动重建：" + aggregate_error);
+            }
         }
     }
 
@@ -428,6 +450,34 @@ StatusCode HistoryStore::export_records(
     std::vector<HistoryRecord>* records,
     std::string* error_message) const
 {
+    return export_records_page(query, nullptr, true, records, nullptr, error_message);
+}
+
+// 使用稳定排序键读取下一批导出记录；公开 offset 参数保持不变，仅服务内扫描改走本接口。
+StatusCode HistoryStore::export_records_after(
+    const HistoryExportQuery& query,
+    const HistoryExportCursor* cursor,
+    std::vector<HistoryRecord>* records,
+    HistoryExportCursor* next_cursor,
+    std::string* error_message) const
+{
+    if (next_cursor == nullptr) {
+        if (error_message != nullptr) {
+            *error_message = "历史数据导出游标输出参数为空";
+        }
+        return StatusCode::kInvalidArgument;
+    }
+    return export_records_page(query, cursor, false, records, next_cursor, error_message);
+}
+
+StatusCode HistoryStore::export_records_page(
+    const HistoryExportQuery& query,
+    const HistoryExportCursor* cursor,
+    bool use_offset,
+    std::vector<HistoryRecord>* records,
+    HistoryExportCursor* next_cursor,
+    std::string* error_message) const
+{
     if (records == nullptr) {
         if (error_message != nullptr) {
             *error_message = "历史数据导出输出参数为空";
@@ -441,11 +491,14 @@ StatusCode HistoryStore::export_records(
         }
         return StatusCode::kInvalidArgument;
     }
-
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!database_available_locked(error_message)) {
-        return StatusCode::kInvalidState;
+    if (next_cursor != nullptr) {
+        *next_cursor = {};
     }
+
+    ReadLease lease;
+    const auto lease_status = acquire_read_lease(&lease, error_message);
+    if (!is_ok(lease_status)) return lease_status;
+    auto* query_database = lease.database;
 
     std::string query_sql =
         "SELECT device_id, master_id, channel_id, template_id, sample_period, "
@@ -467,14 +520,24 @@ StatusCode HistoryStore::export_records(
     if (!query.sample_period.empty()) {
         query_sql += " AND sample_period = ?";
     }
+    const bool has_cursor = cursor != nullptr && cursor->valid;
+    if (has_cursor) {
+        query_sql +=
+            " AND (bucket_start_ms, channel_id, master_id, device_id, point_key, sample_period) "
+            "> (?, ?, ?, ?, ?, ?)";
+    }
     query_sql +=
         " ORDER BY bucket_start_ms ASC, channel_id ASC, master_id ASC, device_id ASC, point_key ASC, sample_period ASC, id ASC "
-        "LIMIT ? OFFSET ?;";
+        "LIMIT ?";
+    if (use_offset) {
+        query_sql += " OFFSET ?";
+    }
+    query_sql += ";";
 
-    Statement statement(database_, query_sql.c_str());
+    Statement statement(query_database, query_sql.c_str());
     if (!statement.ok()) {
         if (error_message != nullptr) {
-            *error_message = join_error("准备历史数据导出查询语句失败", sqlite_error(database_));
+            *error_message = join_error("准备历史数据导出查询语句失败", sqlite_error(query_database));
         }
         return StatusCode::kIoError;
     }
@@ -496,12 +559,23 @@ StatusCode HistoryStore::export_records(
     if (!query.sample_period.empty()) {
         bind_ok = bind_ok && bind_text(statement.get(), bind_index++, query.sample_period);
     }
-    bind_ok = bind_ok &&
-              bind_int64(statement.get(), bind_index++, normalize_export_limit(query.limit)) &&
-              bind_int64(statement.get(), bind_index++, query.offset);
+    if (has_cursor) {
+        bind_ok = bind_ok &&
+                  bind_int64(statement.get(), bind_index++, cursor->bucket_start_ms) &&
+                  bind_text(statement.get(), bind_index++, cursor->channel_id) &&
+                  bind_text(statement.get(), bind_index++, cursor->master_id) &&
+                  bind_text(statement.get(), bind_index++, cursor->device_id) &&
+                  bind_text(statement.get(), bind_index++, cursor->point_key) &&
+                  bind_text(statement.get(), bind_index++, cursor->sample_period);
+    }
+    bind_ok = bind_ok && bind_int64(
+        statement.get(), bind_index++, normalize_export_limit(query.limit));
+    if (use_offset) {
+        bind_ok = bind_ok && bind_int64(statement.get(), bind_index++, query.offset);
+    }
     if (!bind_ok) {
         if (error_message != nullptr) {
-            *error_message = join_error("绑定历史数据导出查询参数失败", sqlite_error(database_));
+            *error_message = join_error("绑定历史数据导出查询参数失败", sqlite_error(query_database));
         }
         return StatusCode::kIoError;
     }
@@ -509,14 +583,26 @@ StatusCode HistoryStore::export_records(
     while (true) {
         const auto step_status = sqlite3_step(statement.get());
         if (step_status == SQLITE_ROW) {
-            records->push_back(read_history_record(statement.get()));
+            auto record = read_history_record(statement.get());
+            if (next_cursor != nullptr) {
+                next_cursor->bucket_start_ms = record.bucket_start_ms;
+                next_cursor->channel_id = record.channel_id;
+                next_cursor->master_id = record.master_id;
+                next_cursor->device_id = record.device_id;
+                next_cursor->point_key = record.point_key;
+                next_cursor->sample_period = record.sample_period;
+                // unique(device_id, point_key, sample_period, bucket_start_ms) 保证该排序前缀唯一；
+                // 不把 INSERT OR REPLACE 会改变的 rowid 放入游标，避免同一桶被更新后重复导出。
+                next_cursor->valid = true;
+            }
+            records->push_back(std::move(record));
             continue;
         }
         if (step_status == SQLITE_DONE) {
             break;
         }
         if (error_message != nullptr) {
-            *error_message = join_error("读取历史数据导出记录失败", sqlite_error(database_));
+            *error_message = join_error("读取历史数据导出记录失败", sqlite_error(query_database));
         }
         records->clear();
         return StatusCode::kIoError;
@@ -576,10 +662,10 @@ StatusCode HistoryStore::get_device_history(
         return StatusCode::kInvalidArgument;
     }
 
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!database_available_locked(error_message)) {
-        return StatusCode::kInvalidState;
-    }
+    ReadLease lease;
+    const auto lease_status = acquire_read_lease(&lease, error_message);
+    if (!is_ok(lease_status)) return lease_status;
+    auto* query_database = lease.database;
 
     std::string point_key = options.point_key;
     if (point_key.empty()) {
@@ -588,10 +674,10 @@ StatusCode HistoryStore::get_device_history(
             "SELECT 1 FROM history_samples "
             "WHERE device_id = ? AND sample_period = ? AND point_key = ? "
             "LIMIT 1;";
-        Statement resistance_statement(database_, resistance_sql);
+        Statement resistance_statement(query_database, resistance_sql);
         if (!resistance_statement.ok()) {
             if (error_message != nullptr) {
-                *error_message = join_error("准备默认历史点位查询语句失败", sqlite_error(database_));
+                *error_message = join_error("准备默认历史点位查询语句失败", sqlite_error(query_database));
             }
             return StatusCode::kIoError;
         }
@@ -599,7 +685,7 @@ StatusCode HistoryStore::get_device_history(
             !bind_text(resistance_statement.get(), 2, sample_period) ||
             !bind_text(resistance_statement.get(), 3, kResistanceFieldKey)) {
             if (error_message != nullptr) {
-                *error_message = join_error("绑定默认历史点位查询参数失败", sqlite_error(database_));
+                *error_message = join_error("绑定默认历史点位查询参数失败", sqlite_error(query_database));
             }
             return StatusCode::kIoError;
         }
@@ -608,7 +694,7 @@ StatusCode HistoryStore::get_device_history(
             point_key = kResistanceFieldKey;
         } else if (resistance_status != SQLITE_DONE) {
             if (error_message != nullptr) {
-                *error_message = join_error("读取默认历史点位失败", sqlite_error(database_));
+                *error_message = join_error("读取默认历史点位失败", sqlite_error(query_database));
             }
             return StatusCode::kIoError;
         }
@@ -620,17 +706,17 @@ StatusCode HistoryStore::get_device_history(
             "WHERE device_id = ? AND sample_period = ? "
             "ORDER BY bucket_start_ms ASC, point_key ASC "
             "LIMIT 1;";
-        Statement point_statement(database_, first_point_sql);
+        Statement point_statement(query_database, first_point_sql);
         if (!point_statement.ok()) {
             if (error_message != nullptr) {
-                *error_message = join_error("准备首个历史点位查询语句失败", sqlite_error(database_));
+                *error_message = join_error("准备首个历史点位查询语句失败", sqlite_error(query_database));
             }
             return StatusCode::kIoError;
         }
         if (!bind_text(point_statement.get(), 1, device_id) ||
             !bind_text(point_statement.get(), 2, sample_period)) {
             if (error_message != nullptr) {
-                *error_message = join_error("绑定首个历史点位查询参数失败", sqlite_error(database_));
+                *error_message = join_error("绑定首个历史点位查询参数失败", sqlite_error(query_database));
             }
             return StatusCode::kIoError;
         }
@@ -639,7 +725,7 @@ StatusCode HistoryStore::get_device_history(
             point_key = column_text(point_statement.get(), 0);
         } else if (point_status != SQLITE_DONE) {
             if (error_message != nullptr) {
-                *error_message = join_error("读取首个历史点位失败", sqlite_error(database_));
+                *error_message = join_error("读取首个历史点位失败", sqlite_error(query_database));
             }
             return StatusCode::kIoError;
         }
@@ -670,10 +756,10 @@ StatusCode HistoryStore::get_device_history(
     }
     query_sql += " ORDER BY bucket_start_ms ASC;";
 
-    Statement statement(database_, query_sql.c_str());
+    Statement statement(query_database, query_sql.c_str());
     if (!statement.ok()) {
         if (error_message != nullptr) {
-            *error_message = join_error("准备历史数据查询语句失败", sqlite_error(database_));
+            *error_message = join_error("准备历史数据查询语句失败", sqlite_error(query_database));
         }
         return StatusCode::kIoError;
     }
@@ -702,7 +788,7 @@ StatusCode HistoryStore::get_device_history(
     }
     if (!bind_ok) {
         if (error_message != nullptr) {
-            *error_message = join_error("绑定历史数据查询参数失败", sqlite_error(database_));
+            *error_message = join_error("绑定历史数据查询参数失败", sqlite_error(query_database));
         }
         return StatusCode::kIoError;
     }
@@ -736,7 +822,7 @@ StatusCode HistoryStore::get_device_history(
             break;
         }
         if (error_message != nullptr) {
-            *error_message = join_error("读取历史数据失败", sqlite_error(database_));
+            *error_message = join_error("读取历史数据失败", sqlite_error(query_database));
         }
         records->clear();
         return StatusCode::kIoError;
@@ -757,10 +843,10 @@ StatusCode HistoryStore::get_history_overview_summaries(
     }
     summaries->clear();
 
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!database_available_locked(error_message)) {
-        return StatusCode::kInvalidState;
-    }
+    ReadLease lease;
+    const auto lease_status = acquire_read_lease(&lease, error_message);
+    if (!is_ok(lease_status)) return lease_status;
+    auto* query_database = lease.database;
 
     const char* sql =
         "WITH aggregate_rows AS ("
@@ -782,10 +868,10 @@ StatusCode HistoryStore::get_history_overview_summaries(
         "  AND latest.sample_period = aggregate_rows.sample_period"
         "  AND latest.bucket_start_ms = aggregate_rows.latest_bucket_start_ms"
         " ORDER BY latest.device_id, latest.point_key, latest.sample_period;";
-    Statement statement(database_, sql);
+    Statement statement(query_database, sql);
     if (!statement.ok()) {
         if (error_message != nullptr) {
-            *error_message = join_error("准备历史总览摘要查询失败", sqlite_error(database_));
+            *error_message = join_error("准备历史总览摘要查询失败", sqlite_error(query_database));
         }
         return StatusCode::kIoError;
     }
@@ -794,7 +880,7 @@ StatusCode HistoryStore::get_history_overview_summaries(
     if (!bind_int64(statement.get(), 1, cutoff_ms(now_ms, kDefaultDayQueryRangeMs)) ||
         !bind_int64(statement.get(), 2, cutoff_ms(now_ms, kDefaultHourQueryRangeMs))) {
         if (error_message != nullptr) {
-            *error_message = join_error("绑定历史总览摘要查询参数失败", sqlite_error(database_));
+            *error_message = join_error("绑定历史总览摘要查询参数失败", sqlite_error(query_database));
         }
         return StatusCode::kIoError;
     }
@@ -822,7 +908,7 @@ StatusCode HistoryStore::get_history_overview_summaries(
             return StatusCode::kOk;
         }
         if (error_message != nullptr) {
-            *error_message = join_error("读取历史总览摘要失败", sqlite_error(database_));
+            *error_message = join_error("读取历史总览摘要失败", sqlite_error(query_database));
         }
         summaries->clear();
         return StatusCode::kIoError;
@@ -867,10 +953,10 @@ StatusCode HistoryStore::get_device_history_points(
     }
     const auto normalized_period = normalize_sample_period(requested_period);
 
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!database_available_locked(error_message)) {
-        return StatusCode::kInvalidState;
-    }
+    ReadLease lease;
+    const auto lease_status = acquire_read_lease(&lease, error_message);
+    if (!is_ok(lease_status)) return lease_status;
+    auto* query_database = lease.database;
 
     const char* query_sql =
         "SELECT point_key, "
@@ -882,17 +968,17 @@ StatusCode HistoryStore::get_device_history_points(
         "WHERE device_id = ? AND sample_period = ? "
         "GROUP BY point_key "
         "ORDER BY MIN(bucket_start_ms) ASC, point_key ASC;";
-    Statement statement(database_, query_sql);
+    Statement statement(query_database, query_sql);
     if (!statement.ok()) {
         if (error_message != nullptr) {
-            *error_message = join_error("准备历史点位查询语句失败", sqlite_error(database_));
+            *error_message = join_error("准备历史点位查询语句失败", sqlite_error(query_database));
         }
         return StatusCode::kIoError;
     }
     if (!bind_text(statement.get(), 1, device_id) ||
         !bind_text(statement.get(), 2, normalized_period)) {
         if (error_message != nullptr) {
-            *error_message = join_error("绑定历史点位查询参数失败", sqlite_error(database_));
+            *error_message = join_error("绑定历史点位查询参数失败", sqlite_error(query_database));
         }
         return StatusCode::kIoError;
     }
@@ -914,7 +1000,7 @@ StatusCode HistoryStore::get_device_history_points(
             break;
         }
         if (error_message != nullptr) {
-            *error_message = join_error("读取历史点位失败", sqlite_error(database_));
+            *error_message = join_error("读取历史点位失败", sqlite_error(query_database));
         }
         points->clear();
         return StatusCode::kIoError;
@@ -1079,6 +1165,100 @@ StatusCode HistoryStore::refresh_aggregate_buckets_locked(
     return StatusCode::kOk;
 }
 
+StatusCode HistoryStore::aggregate_rebuild_required_locked(
+    bool* required,
+    std::string* error_message) const
+{
+    if (required == nullptr) {
+        if (error_message != nullptr) *error_message = "历史聚合状态输出参数为空";
+        return StatusCode::kInvalidArgument;
+    }
+    *required = true;
+    Statement statement(
+        database_,
+        "SELECT aggregate_version, dirty FROM history_aggregate_state WHERE singleton_id = 1;");
+    if (!statement.ok()) {
+        if (error_message != nullptr) {
+            *error_message = join_error("准备读取历史聚合状态失败", sqlite_error(database_));
+        }
+        return StatusCode::kIoError;
+    }
+    const auto step_status = sqlite3_step(statement.get());
+    if (step_status == SQLITE_DONE) {
+        return StatusCode::kOk;
+    }
+    if (step_status != SQLITE_ROW) {
+        if (error_message != nullptr) {
+            *error_message = join_error("读取历史聚合状态失败", sqlite_error(database_));
+        }
+        return StatusCode::kIoError;
+    }
+    *required = sqlite3_column_int(statement.get(), 0) != kCurrentAggregateStateVersion ||
+                sqlite3_column_int(statement.get(), 1) != 0;
+    return StatusCode::kOk;
+}
+
+StatusCode HistoryStore::set_aggregate_state_locked(
+    bool dirty,
+    TimestampMs now_ms,
+    std::string* error_message)
+{
+    Statement statement(
+        database_,
+        "INSERT INTO history_aggregate_state(singleton_id, aggregate_version, dirty, updated_at_ms) "
+        "VALUES(1, ?, ?, ?) "
+        "ON CONFLICT(singleton_id) DO UPDATE SET "
+        "aggregate_version = excluded.aggregate_version, dirty = excluded.dirty, "
+        "updated_at_ms = excluded.updated_at_ms;");
+    if (!statement.ok() ||
+        !bind_int(statement.get(), 1, kCurrentAggregateStateVersion) ||
+        !bind_int(statement.get(), 2, dirty ? 1 : 0) ||
+        !bind_int64(statement.get(), 3, now_ms) ||
+        sqlite3_step(statement.get()) != SQLITE_DONE) {
+        if (error_message != nullptr) {
+            *error_message = join_error("写入历史聚合状态失败", sqlite_error(database_));
+        }
+        return StatusCode::kIoError;
+    }
+    return StatusCode::kOk;
+}
+
+StatusCode HistoryStore::rebuild_aggregates_if_needed_locked(
+    TimestampMs now_ms,
+    bool* rebuilt,
+    std::string* error_message)
+{
+    if (rebuilt != nullptr) *rebuilt = false;
+    bool required = true;
+    auto status = aggregate_rebuild_required_locked(&required, error_message);
+    if (!is_ok(status) || !required) return status;
+
+    // 先独立提交 dirty。这样补算事务失败或进程中断时，下一次启动仍有持久化证据可重试。
+    status = execute_sql_locked("BEGIN IMMEDIATE TRANSACTION;", error_message);
+    if (is_ok(status)) status = set_aggregate_state_locked(true, now_ms, error_message);
+    if (is_ok(status)) status = execute_sql_locked("COMMIT;", error_message);
+    if (!is_ok(status)) {
+        (void)execute_sql_locked("ROLLBACK;", nullptr);
+        return status;
+    }
+
+    status = execute_sql_locked("BEGIN IMMEDIATE TRANSACTION;", error_message);
+    if (is_ok(status)) status = rebuild_recent_aggregates_locked(now_ms, error_message);
+    if (is_ok(status)) status = set_aggregate_state_locked(false, now_ms, error_message);
+    if (is_ok(status)) status = execute_sql_locked("COMMIT;", error_message);
+    if (!is_ok(status)) {
+        const auto original_error = error_message == nullptr ? std::string{} : *error_message;
+        std::string rollback_error;
+        const auto rollback_status = execute_sql_locked("ROLLBACK;", &rollback_error);
+        if (!is_ok(rollback_status) && error_message != nullptr) {
+            *error_message = join_error(original_error, "回滚启动补算失败：" + rollback_error);
+        }
+        return status;
+    }
+    if (rebuilt != nullptr) *rebuilt = true;
+    return StatusCode::kOk;
+}
+
 // 在持锁状态下重建近期聚合记录。
 StatusCode HistoryStore::rebuild_recent_aggregates_locked(TimestampMs now_ms, std::string* error_message)
 {
@@ -1169,11 +1349,13 @@ StatusCode HistoryStore::count_by_period(
         if (error_message != nullptr) *error_message = "历史采样粒度或计数输出参数无效";
         return StatusCode::kInvalidArgument;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!database_available_locked(error_message)) return StatusCode::kInvalidState;
-    Statement statement(database_, "SELECT COUNT(*) FROM history_samples WHERE sample_period = ?;");
+    ReadLease lease;
+    const auto lease_status = acquire_read_lease(&lease, error_message);
+    if (!is_ok(lease_status)) return lease_status;
+    auto* query_database = lease.database;
+    Statement statement(query_database, "SELECT COUNT(*) FROM history_samples WHERE sample_period = ?;");
     if (!statement.ok() || !bind_text(statement.get(), 1, sample_period) || sqlite3_step(statement.get()) != SQLITE_ROW) {
-        if (error_message != nullptr) *error_message = join_error("统计历史数据数量失败", sqlite_error(database_));
+        if (error_message != nullptr) *error_message = join_error("统计历史数据数量失败", sqlite_error(query_database));
         return StatusCode::kIoError;
     }
     *count = static_cast<std::uint64_t>(sqlite3_column_int64(statement.get(), 0));
@@ -1247,18 +1429,128 @@ StatusCode HistoryStore::open_database_locked(const std::string& database_path, 
     }
 
     std::string rebuild_error;
-    const auto rebuild_status = rebuild_recent_aggregates_locked(time_utils::system_now_ms(), &rebuild_error);
+    bool rebuilt = false;
+    const auto rebuild_status = rebuild_aggregates_if_needed_locked(
+        time_utils::system_now_ms(), &rebuilt, &rebuild_error);
     if (!is_ok(rebuild_status)) {
-        Logger::warn("历史 SQLite 启动补算失败，后续采样将继续重试：" + rebuild_error);
+        Logger::warn("历史 SQLite 启动补算失败，dirty 标记已保留供下次启动重试：" + rebuild_error);
+    } else if (rebuilt) {
+        Logger::info("历史 SQLite 聚合补算完成并清理 dirty 标记");
+    }
+
+    const auto readers_status = open_read_connections_locked(error_message);
+    if (!is_ok(readers_status)) {
+        close_database_locked();
+        return readers_status;
     }
     last_cleanup_time_ = {};
 
     return StatusCode::kOk;
 }
 
+StatusCode HistoryStore::open_read_connections_locked(std::string* error_message)
+{
+    close_read_connections_locked();
+    // SQLite 的普通 :memory: 数据库按连接隔离；这里保留原有单连接可见性语义。
+    if (database_path_ == ":memory:") {
+        return StatusCode::kOk;
+    }
+
+    for (auto& slot : read_connections_) {
+        sqlite3* opened_database = nullptr;
+        const auto open_status = sqlite3_open_v2(
+            database_path_.c_str(),
+            &opened_database,
+            SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX,
+            nullptr);
+        if (open_status != SQLITE_OK) {
+            const auto detail = sqlite_error(opened_database);
+            if (opened_database != nullptr) sqlite3_close(opened_database);
+            close_read_connections_locked();
+            if (error_message != nullptr) {
+                *error_message = join_error("打开历史 SQLite 只读连接失败", detail);
+            }
+            return StatusCode::kIoError;
+        }
+
+        sqlite3_busy_timeout(opened_database, kHistoryReadBusyTimeoutMs);
+        char* raw_error = nullptr;
+        const auto configure_status = sqlite3_exec(
+            opened_database,
+            "PRAGMA query_only = ON;PRAGMA cache_size = -512;",
+            nullptr,
+            nullptr,
+            &raw_error);
+        if (configure_status != SQLITE_OK) {
+            const std::string detail = raw_error == nullptr
+                                           ? sqlite_error(opened_database)
+                                           : raw_error;
+            sqlite3_free(raw_error);
+            sqlite3_close(opened_database);
+            close_read_connections_locked();
+            if (error_message != nullptr) {
+                *error_message = join_error("配置历史 SQLite 只读连接失败", detail);
+            }
+            return StatusCode::kIoError;
+        }
+
+        auto connection = std::make_shared<ReadConnection>();
+        connection->database = opened_database;
+        slot = std::move(connection);
+    }
+    next_read_connection_ = 0;
+    return StatusCode::kOk;
+}
+
+void HistoryStore::close_read_connections_locked()
+{
+    for (auto& connection : read_connections_) {
+        connection.reset();
+    }
+    next_read_connection_ = 0;
+}
+
+StatusCode HistoryStore::acquire_read_lease(
+    ReadLease* lease,
+    std::string* error_message) const
+{
+    if (lease == nullptr) {
+        if (error_message != nullptr) *error_message = "历史 SQLite 只读租约输出参数为空";
+        return StatusCode::kInvalidArgument;
+    }
+    lease->database = nullptr;
+    lease->lifecycle_lock = std::unique_lock<std::mutex>(mutex_);
+    if (!database_available_locked(error_message)) {
+        return StatusCode::kInvalidState;
+    }
+
+    for (std::size_t attempt = 0; attempt < read_connections_.size(); ++attempt) {
+        const auto index = (next_read_connection_ + attempt) % read_connections_.size();
+        auto connection = read_connections_[index];
+        if (connection == nullptr || connection->database == nullptr) continue;
+        lease->connection = std::move(connection);
+        next_read_connection_ = (index + 1) % read_connections_.size();
+        lease->lifecycle_lock.unlock();
+        // 连接由 shared_ptr 保活，因此等待繁忙读连接时不占用写连接的生命周期锁。
+        lease->connection_lock = std::unique_lock<std::mutex>(lease->connection->mutex);
+        lease->database = lease->connection->database;
+        return StatusCode::kOk;
+    }
+
+    // :memory: 数据库没有可共享的独立连接，主锁随 lease 保持到查询结束。
+    lease->database = database_;
+    return StatusCode::kOk;
+}
+
 // 在持锁状态下初始化数据库结构。
 StatusCode HistoryStore::initialize_schema_locked(std::string* error_message)
 {
+    const char* aggregate_state_schema_sql =
+        "CREATE TABLE IF NOT EXISTS history_aggregate_state ("
+        "singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),"
+        "aggregate_version INTEGER NOT NULL,"
+        "dirty INTEGER NOT NULL CHECK(dirty IN (0, 1)),"
+        "updated_at_ms INTEGER NOT NULL);";
     const auto configure_status = execute_sql_locked(
         "PRAGMA busy_timeout = 5000;"
         "PRAGMA journal_mode = WAL;"
@@ -1293,7 +1585,8 @@ StatusCode HistoryStore::initialize_schema_locked(std::string* error_message)
             }
             return StatusCode::kInvalidState;
         }
-        return StatusCode::kOk;
+        // version 1 现场库采用可向后兼容的内部状态表；缺少状态行会被视为 dirty 并补算一次。
+        return execute_sql_locked(aggregate_state_schema_sql, error_message);
     }
     if (version != 0) {
         if (error_message != nullptr) {
@@ -1352,7 +1645,12 @@ StatusCode HistoryStore::initialize_schema_locked(std::string* error_message)
         "CREATE INDEX IF NOT EXISTS idx_history_samples_period_time "
         "ON history_samples(sample_period, bucket_start_ms);"
         "CREATE INDEX IF NOT EXISTS idx_history_samples_date "
-        "ON history_samples(date_text);";
+        "ON history_samples(date_text);"
+        "CREATE TABLE IF NOT EXISTS history_aggregate_state ("
+        "singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),"
+        "aggregate_version INTEGER NOT NULL,"
+        "dirty INTEGER NOT NULL CHECK(dirty IN (0, 1)),"
+        "updated_at_ms INTEGER NOT NULL);";
 
     status = execute_sql_locked(schema_sql, error_message);
     if (is_ok(status)) status = execute_sql_locked("PRAGMA user_version = 1;", error_message);
@@ -1474,6 +1772,7 @@ StatusCode HistoryStore::ensure_database_for_write_locked(std::string* error_mes
 // 在持锁状态下关闭数据库。
 void HistoryStore::close_database_locked()
 {
+    close_read_connections_locked();
     if (database_ != nullptr) {
         sqlite3_close(database_);
         database_ = nullptr;

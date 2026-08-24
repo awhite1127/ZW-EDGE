@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"edge-web/internal/model"
 )
@@ -41,11 +40,11 @@ func (s *ConsoleService) LoadEvents(ctx context.Context, query model.EventsPageQ
 		result.ActiveAlarmsState.Available = true
 		result.AlarmRulesState.Available = true
 		var (
-			devices    []model.DeviceConfig
-			events     []model.ServiceEvent
-			devicesErr error
-			eventsErr  error
-			wg         sync.WaitGroup
+			devices      []model.DeviceConfig
+			eventHistory model.EventHistoryResult
+			devicesErr   error
+			eventsErr    error
+			wg           sync.WaitGroup
 		)
 		wg.Add(2)
 		go func() {
@@ -54,10 +53,17 @@ func (s *ConsoleService) LoadEvents(ctx context.Context, query model.EventsPageQ
 		}()
 		go func() {
 			defer wg.Done()
-			events, eventsErr = s.backend.ListRecentEvents(ctx)
+			eventHistory, eventsErr = s.backend.QueryServiceEvents(ctx, model.EventHistoryQuery{
+				Level:     result.LevelFilter,
+				Source:    result.SourceFilter,
+				Search:    result.SearchQuery,
+				TimeRange: result.TimeRange,
+				Page:      result.Page,
+				PageSize:  result.PageSize,
+			})
 		}()
 		wg.Wait()
-		applyEventsHistoryData(&result, events, eventsErr, devices, devicesErr)
+		applyEventsHistoryData(&result, eventHistory, eventsErr, devices, devicesErr)
 		result.BasePageData.BackendReachable = result.EventsState.Available
 		return result
 	}
@@ -145,7 +151,7 @@ func applyActiveAlarmData(result *model.EventsPageData, alarms []model.ActiveAla
 // applyEventsHistoryData 应用历史事件筛选、统计和分页。
 func applyEventsHistoryData(
 	result *model.EventsPageData,
-	events []model.ServiceEvent,
+	history model.EventHistoryResult,
 	eventsErr error,
 	devices []model.DeviceConfig,
 	devicesErr error,
@@ -157,17 +163,18 @@ func applyEventsHistoryData(
 		result.EventsState.ErrorMessage = eventsErr.Error()
 		return
 	}
+	result.Events = history.Rows
 	if devicesErr == nil {
-		events = applyCurrentDeviceNamesToEvents(events, devices)
+		result.Events = applyCurrentDeviceNamesToEvents(result.Events, devices)
 	}
-	result.TotalEventCount = len(events)
+	result.ErrorCount = history.LevelStats.Error
+	result.WarningCount = history.LevelStats.Warning
+	result.InfoCount = history.LevelStats.Info
+	result.TotalEventCount = result.ErrorCount + result.WarningCount + result.InfoCount
 	result.HasAnyEvents = result.TotalEventCount > 0
-	result.ErrorCount, result.WarningCount, result.InfoCount = countEventsByLevel(events)
-	result.SourceOptions = buildEventSourceOptions(events)
+	result.SourceOptions = buildEventSourceOptions(history.SourceStats)
 
-	// 先在内存中完成筛选和分页，避免模板层承担业务判断，也保证分页统计与当前筛选条件一致。
-	filtered := filterEvents(events, result.LevelFilter, result.SourceFilter, result.SearchQuery, result.TimeRange)
-	result.FilteredEventCount = len(filtered)
+	result.FilteredEventCount = history.Total
 	result.TotalPages = totalPages(result.FilteredEventCount, result.PageSize)
 	if result.Page > result.TotalPages {
 		result.Page = result.TotalPages
@@ -180,18 +187,12 @@ func applyEventsHistoryData(
 	result.HasPrevPage = result.Page > 1
 	result.HasNextPage = result.Page < result.TotalPages
 
-	start := (result.Page - 1) * result.PageSize
-	if start > len(filtered) {
-		start = len(filtered)
-	}
-	end := start + result.PageSize
-	if end > len(filtered) {
-		end = len(filtered)
-	}
-	result.Events = filtered[start:end]
 	if result.FilteredEventCount > 0 {
-		result.PageStart = start + 1
-		result.PageEnd = end
+		result.PageStart = (result.Page-1)*result.PageSize + 1
+		result.PageEnd = result.PageStart + len(result.Events) - 1
+		if result.PageEnd > result.FilteredEventCount {
+			result.PageEnd = result.FilteredEventCount
+		}
 	}
 	result.EventsState.Available = true
 }
@@ -356,18 +357,6 @@ func normalizeEventLevelFilter(level string) string {
 	}
 }
 
-// normalizeEventLevel 规范化事件级别。
-func normalizeEventLevel(level string) string {
-	switch strings.ToLower(strings.TrimSpace(level)) {
-	case "error":
-		return "error"
-	case "warning", "warn":
-		return "warning"
-	default:
-		return "info"
-	}
-}
-
 // normalizeEventTimeRange 规范化事件时间范围。
 func normalizeEventTimeRange(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
@@ -383,34 +372,16 @@ func normalizeEventSourceFilter(source string) string {
 	return strings.ToLower(strings.TrimSpace(source))
 }
 
-// countEventsByLevel 统计事件按级别。
-func countEventsByLevel(events []model.ServiceEvent) (int, int, int) {
-	var errorCount int
-	var warningCount int
-	var infoCount int
-	for _, event := range events {
-		switch normalizeEventLevel(event.Level) {
-		case "error":
-			errorCount++
-		case "warning":
-			warningCount++
-		default:
-			infoCount++
-		}
-	}
-	return errorCount, warningCount, infoCount
-}
-
 // buildEventSourceOptions 构建事件来源选项。
-func buildEventSourceOptions(events []model.ServiceEvent) []model.EventFilterOption {
+func buildEventSourceOptions(stats []model.EventSourceStat) []model.EventFilterOption {
 	known := []string{"data_alarm", "alarm_ack", "config_apply", "system", "channel", "master", "device", "polling", "polling_cycle", "channel_startup", "master_collect", "system_startup", "reload_config", "initialize"}
 	seen := make(map[string]bool)
-	options := make([]model.EventFilterOption, 0, len(known)+len(events))
+	options := make([]model.EventFilterOption, 0, len(known)+len(stats))
 	for _, source := range known {
 		options = appendEventSourceOption(options, seen, source)
 	}
-	for _, event := range events {
-		options = appendEventSourceOption(options, seen, event.Source)
+	for _, stat := range stats {
+		options = appendEventSourceOption(options, seen, stat.Source)
 	}
 	return options
 }
@@ -426,68 +397,6 @@ func appendEventSourceOption(options []model.EventFilterOption, seen map[string]
 		Value: source,
 		Label: model.EventSourceLabel(source),
 	})
-}
-
-// filterEvents 筛选事件。
-func filterEvents(events []model.ServiceEvent, level string, source string, search string, timeRange string) []model.ServiceEvent {
-	// 搜索只匹配用户能在事件列表理解的摘要、详情、对象和诊断字段，不暴露内部 JSON 结构。
-	filtered := make([]model.ServiceEvent, 0, len(events))
-	cutoff := eventTimeCutoff(timeRange)
-	search = strings.ToLower(strings.TrimSpace(search))
-	source = normalizeEventSourceFilter(source)
-
-	for _, event := range events {
-		if level != "all" && normalizeEventLevel(event.Level) != level {
-			continue
-		}
-		if source != "" && normalizeEventSourceFilter(event.Source) != source {
-			continue
-		}
-		if cutoff > 0 && event.TimestampMS < cutoff {
-			continue
-		}
-		if search != "" && !eventMatchesSearch(event, search) {
-			continue
-		}
-		filtered = append(filtered, event)
-	}
-	return filtered
-}
-
-// eventTimeCutoff 根据筛选范围计算事件截止时间。
-func eventTimeCutoff(timeRange string) uint64 {
-	var duration time.Duration
-	switch normalizeEventTimeRange(timeRange) {
-	case "24h":
-		duration = 24 * time.Hour
-	case "3d":
-		duration = 72 * time.Hour
-	case "7d":
-		duration = 7 * 24 * time.Hour
-	default:
-		return 0
-	}
-	return uint64(time.Now().Add(-duration).UnixMilli())
-}
-
-// eventMatchesSearch 判断事件是否匹配当前搜索条件。
-func eventMatchesSearch(event model.ServiceEvent, search string) bool {
-	values := []string{
-		event.Summary,
-		event.Detail,
-		event.TargetID,
-		event.Diagnosis.TargetID,
-		event.Diagnosis.TargetName,
-		event.Diagnosis.ErrorCode,
-		event.Diagnosis.Message,
-		event.Diagnosis.Suggestion,
-	}
-	for _, value := range values {
-		if strings.Contains(strings.ToLower(value), search) {
-			return true
-		}
-	}
-	return false
 }
 
 // ClearRecentEvents 清除最近事件。

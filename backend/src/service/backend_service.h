@@ -423,6 +423,11 @@ public:
     std::vector<ServiceEvent> get_recent_events(std::size_t limit = 100) const;
     // 获取最近事件。
     StatusCode get_recent_events(std::size_t limit, std::vector<ServiceEvent>* events, std::string* error_message = nullptr) const;
+    // 按页面筛选条件读取历史事件和统计。
+    StatusCode query_service_events(
+        const EventHistoryQuery& query,
+        EventHistoryResult* result,
+        std::string* error_message = nullptr) const;
     // 按导出筛选条件分页读取持久化历史事件。
     StatusCode export_service_events(
         const EventExportQuery& query,

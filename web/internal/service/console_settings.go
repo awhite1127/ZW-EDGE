@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"edge-web/internal/model"
 )
@@ -31,12 +32,17 @@ func (s *ConsoleService) GetEditableDeviceTemplate(ctx context.Context, template
 		return model.DeviceTemplateDefinition{}, false, err
 	}
 	view = displayDeviceTemplateManagement(view)
+	definition, found := editableDeviceTemplate(view, templateID)
+	return definition, found, nil
+}
+
+func editableDeviceTemplate(view model.DeviceTemplateManagementView, templateID string) (model.DeviceTemplateDefinition, bool) {
 	for _, item := range view.Templates {
 		if item.TemplateID == strings.TrimSpace(templateID) && !item.Builtin && item.Editable {
-			return item.EditorDefinition, true, nil
+			return item.EditorDefinition, true
 		}
 	}
-	return model.DeviceTemplateDefinition{}, false, nil
+	return model.DeviceTemplateDefinition{}, false
 }
 
 func (s *ConsoleService) UpdateDeviceTemplateRealtimeDisplay(
@@ -75,6 +81,55 @@ func (s *ConsoleService) GetSystemSettings(ctx context.Context) (model.SystemSet
 	return s.backend.GetSystemSettings(ctx)
 }
 
+const systemDisplayNameCacheTTL = 5 * time.Second
+
+// GetSystemDisplayName 缓存页面公共标题，完整设置查询始终保持实时读取。
+// generation 防止并发中的旧 IPC 响应覆盖刚刚写入或失效的新值。
+func (s *ConsoleService) GetSystemDisplayName(ctx context.Context) (string, error) {
+	now := time.Now()
+	s.systemDisplayNameMu.Lock()
+	if now.Before(s.systemDisplayNameExpiresAt) {
+		value := s.systemDisplayName
+		s.systemDisplayNameMu.Unlock()
+		return value, nil
+	}
+	generation := s.systemDisplayNameGeneration
+	s.systemDisplayNameMu.Unlock()
+
+	settings, err := s.backend.GetSystemSettings(ctx)
+	if err != nil {
+		return "", err
+	}
+	value := strings.TrimSpace(settings.DisplayName)
+
+	s.systemDisplayNameMu.Lock()
+	if generation == s.systemDisplayNameGeneration {
+		s.systemDisplayName = value
+		s.systemDisplayNameExpiresAt = time.Now().Add(systemDisplayNameCacheTTL)
+	} else {
+		// 设置在本次 IPC 期间已经更新或失效，旧响应既不回写也不返回。
+		value = s.systemDisplayName
+	}
+	s.systemDisplayNameMu.Unlock()
+	return value, nil
+}
+
+func (s *ConsoleService) cacheSystemDisplayName(value string) {
+	s.systemDisplayNameMu.Lock()
+	defer s.systemDisplayNameMu.Unlock()
+	s.systemDisplayNameGeneration++
+	s.systemDisplayName = strings.TrimSpace(value)
+	s.systemDisplayNameExpiresAt = time.Now().Add(systemDisplayNameCacheTTL)
+}
+
+func (s *ConsoleService) invalidateSystemDisplayName() {
+	s.systemDisplayNameMu.Lock()
+	defer s.systemDisplayNameMu.Unlock()
+	s.systemDisplayNameGeneration++
+	s.systemDisplayName = ""
+	s.systemDisplayNameExpiresAt = time.Time{}
+}
+
 const settingsTemplatePageSize = 8
 
 func (s *ConsoleService) getTimeSettings(ctx context.Context) (model.TimeSettings, error) {
@@ -83,6 +138,143 @@ func (s *ConsoleService) getTimeSettings(ctx context.Context) (model.TimeSetting
 
 func (s *ConsoleService) getTimeRuntimeStatus(ctx context.Context) (model.TimeRuntimeStatus, error) {
 	return s.backend.GetTimeRuntimeStatus(ctx)
+}
+
+// loadDeviceTemplateSettingsSources 只读取设备类型子页面实际需要的系统标题和模板清单。
+func (s *ConsoleService) loadDeviceTemplateSettingsSources(ctx context.Context) (
+	model.SystemSettings,
+	model.DeviceTemplateManagementView,
+	error,
+	error,
+) {
+	var (
+		settings           model.SystemSettings
+		templateManagement model.DeviceTemplateManagementView
+		settingsErr        error
+		templateErr        error
+		wg                 sync.WaitGroup
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		settings, settingsErr = s.backend.GetSystemSettings(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		templateManagement, templateErr = s.GetDeviceTemplateManagement(ctx)
+	}()
+	wg.Wait()
+	return settings, displayDeviceTemplateManagement(templateManagement), settingsErr, templateErr
+}
+
+func buildDeviceTemplateSettingsPage(
+	settings model.SystemSettings,
+	templateManagement model.DeviceTemplateManagementView,
+	settingsErr error,
+	templateErr error,
+	requestedTemplatePage int,
+) model.SettingsPageData {
+	pagedTemplates, templatePagination := paginateDeviceTemplateManagement(templateManagement, requestedTemplatePage)
+	pageData := model.SettingsPageData{
+		BasePageData:             model.BasePageData{BackendReachable: true},
+		Settings:                 settings,
+		SettingsState:            model.SectionState{Available: true},
+		DeviceTemplateManagement: pagedTemplates,
+		DeviceTemplateState:      model.SectionState{Available: true},
+		DeviceTemplatePagination: templatePagination,
+		SettingsReturnPath:       fmt.Sprintf("/settings/device-types?template_page=%d", templatePagination.Page),
+	}
+	if settingsErr != nil {
+		pageData.Settings = defaultSystemSettings()
+		pageData.SettingsState = model.SectionState{ErrorMessage: settingsErr.Error()}
+	}
+	if templateErr != nil {
+		pageData.DeviceTemplateState = model.SectionState{ErrorMessage: templateErr.Error()}
+	}
+	if settingsErr != nil && templateErr != nil {
+		pageData.BasePageData.BackendReachable = false
+		pageData.BasePageData.ErrorMessage = "后端不可达，设备类型暂时无法获取"
+	}
+	return pageData
+}
+
+// LoadDeviceTemplateSettings 为设备类型管理页执行最小查询计划。
+func (s *ConsoleService) LoadDeviceTemplateSettings(ctx context.Context, requestedTemplatePage int) model.SettingsPageData {
+	settings, templates, settingsErr, templateErr := s.loadDeviceTemplateSettingsSources(ctx)
+	return buildDeviceTemplateSettingsPage(settings, templates, settingsErr, templateErr, requestedTemplatePage)
+}
+
+// LoadDeviceTemplateEditorSettings 复用同一次模板查询完成返回页分页和编辑目标查找。
+func (s *ConsoleService) LoadDeviceTemplateEditorSettings(
+	ctx context.Context,
+	requestedTemplatePage int,
+	templateID string,
+) (model.SettingsPageData, model.DeviceTemplateDefinition, bool, error) {
+	settings, templates, settingsErr, templateErr := s.loadDeviceTemplateSettingsSources(ctx)
+	pageData := buildDeviceTemplateSettingsPage(settings, templates, settingsErr, templateErr, requestedTemplatePage)
+	if strings.TrimSpace(templateID) == "" {
+		return pageData, model.DeviceTemplateDefinition{}, false, nil
+	}
+	if templateErr != nil {
+		return pageData, model.DeviceTemplateDefinition{}, false, templateErr
+	}
+	definition, found := editableDeviceTemplate(templates, templateID)
+	return pageData, definition, found, nil
+}
+
+// LoadMqttSettingsPage 只读取 MQTT 子页面渲染和运行态刷新需要的数据。
+func (s *ConsoleService) LoadMqttSettingsPage(ctx context.Context) model.SettingsPageData {
+	var (
+		settings       model.SystemSettings
+		mqtt           model.MqttSettings
+		mqttRuntime    model.MqttRuntimeStatus
+		settingsErr    error
+		mqttErr        error
+		mqttRuntimeErr error
+		wg             sync.WaitGroup
+	)
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		settings, settingsErr = s.backend.GetSystemSettings(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		mqtt, mqttErr = s.backend.GetMqttSettings(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		mqttRuntime, mqttRuntimeErr = s.backend.GetMqttRuntimeStatus(ctx)
+	}()
+	wg.Wait()
+
+	pageData := model.SettingsPageData{
+		BasePageData:       model.BasePageData{BackendReachable: true},
+		Settings:           settings,
+		SettingsState:      model.SectionState{Available: true},
+		Mqtt:               mqtt,
+		MqttState:          model.SectionState{Available: true},
+		MqttRuntime:        mqttRuntime,
+		MqttRuntimeState:   model.SectionState{Available: true},
+		SettingsReturnPath: "/settings/mqtt",
+	}
+	if settingsErr != nil {
+		pageData.Settings = defaultSystemSettings()
+		pageData.SettingsState = model.SectionState{ErrorMessage: settingsErr.Error()}
+	}
+	if mqttErr != nil {
+		pageData.Mqtt = defaultMqttSettings()
+		pageData.MqttState = model.SectionState{ErrorMessage: mqttErr.Error()}
+	}
+	if mqttRuntimeErr != nil {
+		pageData.MqttRuntime = defaultMqttRuntimeStatus(pageData.Mqtt.Enabled)
+		pageData.MqttRuntimeState = model.SectionState{ErrorMessage: mqttRuntimeErr.Error()}
+	}
+	if settingsErr != nil && mqttErr != nil && mqttRuntimeErr != nil {
+		pageData.BasePageData.BackendReachable = false
+		pageData.BasePageData.ErrorMessage = "后端不可达，MQTT 设置暂时无法获取"
+	}
+	return pageData
 }
 
 func (s *ConsoleService) LoadSettings(ctx context.Context, requestedTemplatePage int) model.SettingsPageData {
@@ -572,8 +764,14 @@ func (s *ConsoleService) UpdateSystemSettings(
 ) model.ActionFeedback {
 	result, err := s.backend.UpdateSystemSettings(ctx, request)
 	if err != nil {
+		s.invalidateSystemDisplayName()
 		return model.ActionFeedback{Success: false, Message: err.Error()}
 	}
+	displayName := result.Settings.DisplayName
+	if strings.TrimSpace(displayName) == "" && strings.TrimSpace(request.DisplayName) != "" {
+		displayName = request.DisplayName
+	}
+	s.cacheSystemDisplayName(displayName)
 	message := result.Message
 	if message == "" {
 		message = "系统设置已保存"
@@ -669,6 +867,7 @@ func (s *ConsoleService) ExportSystemConfig(ctx context.Context) (model.ConfigEx
 func (s *ConsoleService) ImportSystemConfig(ctx context.Context, bundle model.ConfigExportBundle) model.ActionFeedback {
 	result, err := s.backend.ImportSystemConfig(ctx, bundle)
 	if err != nil {
+		s.invalidateSystemDisplayName()
 		message := strings.TrimSpace(err.Error())
 		if message == "" {
 			message = "导入系统配置失败"
@@ -678,6 +877,11 @@ func (s *ConsoleService) ImportSystemConfig(ctx context.Context, bundle model.Co
 	message := strings.TrimSpace(result.Message)
 	if message == "" {
 		message = "配置导入成功，自定义设备类型与采集运行配置已刷新；导入的网络和时间设置已保存，将在设备重启或通过对应设置页手动应用后生效，请重新确认目标设备网络；MQTT 密码和 TLS 证书文件内容不会随配置文件导入，请人工补齐凭据与证书。"
+	}
+	if result.Imported {
+		s.cacheSystemDisplayName(bundle.SystemSettings.DisplayName)
+	} else {
+		s.invalidateSystemDisplayName()
 	}
 	return model.ActionFeedback{Success: result.Imported, Message: message}
 }
@@ -713,6 +917,7 @@ func (s *ConsoleService) SaveAndApplyNetworkSettings(
 func (s *ConsoleService) RequestFactoryReset(ctx context.Context) model.ActionFeedback {
 	result, err := s.backend.RequestFactoryReset(ctx)
 	if err != nil {
+		s.invalidateSystemDisplayName()
 		message := strings.TrimSpace(err.Error())
 		if message == "" {
 			message = "恢复出厂数据失败"
@@ -728,6 +933,11 @@ func (s *ConsoleService) RequestFactoryReset(ctx context.Context) model.ActionFe
 		} else {
 			message = "恢复出厂数据失败"
 		}
+	}
+	if result.ResetCompleted {
+		s.cacheSystemDisplayName("")
+	} else {
+		s.invalidateSystemDisplayName()
 	}
 	return model.ActionFeedback{Success: result.ResetCompleted, Message: message}
 }

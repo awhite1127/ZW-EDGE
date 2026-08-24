@@ -117,6 +117,25 @@ inline EventExportQuery extract_event_export_query(const nlohmann::json& root)
     return query;
 }
 
+// 提取历史事件页筛选与分页参数。
+inline EventHistoryQuery extract_event_history_query(const nlohmann::json& root)
+{
+    EventHistoryQuery query;
+    query.level = optional_string_param(root, "level");
+    query.source = optional_string_param(root, "source");
+    query.time_range = optional_string_param(root, "time_range");
+    if (query.time_range.empty()) {
+        query.time_range = optional_string_param(root, "range");
+    }
+    query.search = optional_string_param(root, "search");
+    if (query.search.empty()) {
+        query.search = optional_string_param(root, "q");
+    }
+    query.page = optional_uint_param(root, "page", query.page);
+    query.page_size = optional_uint_param(root, "page_size", query.page_size);
+    return query;
+}
+
 // 处理系统请求。
 bool handle_system_request(const IpcHandlerContext& context, std::string* response);
 // 处理事件请求。

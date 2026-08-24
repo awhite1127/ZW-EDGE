@@ -70,6 +70,15 @@ StatusCode BackendService::get_recent_events(
     return event_store_.list_recent(limit, events, error_message);
 }
 
+// 读取历史事件页；筛选、分页和统计的一致性由 EventStore 保证。
+StatusCode BackendService::query_service_events(
+    const EventHistoryQuery& query,
+    EventHistoryResult* result,
+    std::string* error_message) const
+{
+    return event_store_.query_history(query, result, error_message);
+}
+
 // 分页读取历史事件导出记录。
 StatusCode BackendService::export_service_events(
     const EventExportQuery& query,

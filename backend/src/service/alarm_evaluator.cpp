@@ -39,6 +39,70 @@ TimestampMs effective_timestamp(const PointValue& point, TimestampMs fallback)
     return time_utils::system_now_ms();
 }
 
+ServiceEvent make_trigger_event(
+    const AlarmRule& rule,
+    const AlarmRuntimeState& state,
+    const AlarmPointContext& context)
+{
+    ServiceEvent event;
+    event.timestamp_ms = state.last_evaluated_at_ms;
+    event.level = rule.level;
+    event.source = "data_alarm";
+    event.target_id = rule.device_id;
+    event.diagnosis.target_id = rule.point_key;
+    event.diagnosis.target_name = context.point_name;
+    event.summary = context.device_name + " " + context.point_name + direction_name(state.direction);
+    event.detail = "当前值 " + value_text(state.current_value, context.precision) + context.unit +
+                   "，阈值 " + value_text(state.threshold_value, context.precision) + context.unit +
+                   "，方向=" + (state.direction == "high" ? "高限" : "低限");
+    return event;
+}
+
+ServiceEvent make_acknowledgement_event(
+    const AlarmRuntimeState& state,
+    const AlarmPointContext& context)
+{
+    ServiceEvent event;
+    event.timestamp_ms = state.acknowledged_at_ms;
+    event.level = "info";
+    event.source = "alarm_ack";
+    event.target_id = state.device_id;
+    event.diagnosis.target_id = state.point_key;
+    event.diagnosis.target_name = context.point_name;
+    event.summary = context.device_name + " " + context.point_name + "告警已确认";
+    event.detail = "确认用户 " + state.acknowledged_by +
+                   "，当前值 " + value_text(state.current_value, context.precision) + context.unit +
+                   "，阈值 " + value_text(state.threshold_value, context.precision) + context.unit;
+    return event;
+}
+
+ServiceEvent make_recovery_event(
+    const AlarmRule& rule,
+    const AlarmRuntimeState& state,
+    const AlarmPointContext& context,
+    const std::string& reason,
+    TimestampMs timestamp_ms)
+{
+    const auto boundary = state.direction == "high"
+                              ? rule.high_threshold - rule.hysteresis
+                              : rule.low_threshold + rule.hysteresis;
+    const auto duration_ms = timestamp_ms >= state.active_since_ms ? timestamp_ms - state.active_since_ms : 0;
+    ServiceEvent event;
+    event.timestamp_ms = timestamp_ms;
+    event.level = "info";
+    event.source = "data_alarm";
+    event.target_id = rule.device_id;
+    event.diagnosis.target_id = rule.point_key;
+    event.diagnosis.target_name = context.point_name;
+    event.summary = context.device_name + " " + context.point_name + direction_name(state.direction) + "已恢复";
+    event.detail = "恢复值 " + value_text(state.current_value, context.precision) + context.unit +
+                   "，恢复边界 " + value_text(boundary, context.precision) + context.unit +
+                   "，原阈值 " + value_text(state.threshold_value, context.precision) + context.unit +
+                   "，持续 " + std::to_string(duration_ms) + "ms";
+    if (!reason.empty()) event.detail += "，解除原因=" + reason;
+    return event;
+}
+
 }  // namespace
 
 // 初始化报警存储并加载规则和活动报警。
@@ -53,6 +117,7 @@ StatusCode AlarmEvaluator::initialize(
         return StatusCode::kInvalidArgument;
     }
 
+    std::unique_lock<std::mutex> mutation_lock(mutation_mutex_);
     std::vector<AlarmRule> rules;
     auto status = store->list_rules(&rules, error_message);
     if (!is_ok(status)) return status;
@@ -60,21 +125,24 @@ StatusCode AlarmEvaluator::initialize(
     status = store->list_runtime_states(&states, error_message);
     if (!is_ok(status)) return status;
 
-    {
-        // 启动时先恢复规则、运行态和拓扑上下文，随后再做一次拓扑同步清理陈旧记录。
-        std::lock_guard<std::mutex> lock(mutex_);
-        store_ = store;
-        event_callback_ = std::move(event_callback);
-        rules_.clear();
-        states_.clear();
-        contexts_.clear();
-        last_checkpoint_times_.clear();
-        for (const auto& context : contexts) contexts_[{context.device_id, context.point_key}] = context;
-        for (const auto& rule : rules) rules_[{rule.device_id, rule.point_key}] = rule;
-        for (const auto& state : states) states_[{state.device_id, state.point_key}] = state;
-        initialized_ = true;
-    }
-    return synchronize_topology(contexts, "拓扑失效", error_message);
+    // 初始化与运行期重载也属于一次 SQLite/内存代际切换，必须和采集批次串行。
+    std::unique_lock<std::mutex> lock(mutex_);
+    store_ = store;
+    event_callback_ = std::move(event_callback);
+    rules_.clear();
+    states_.clear();
+    contexts_.clear();
+    last_checkpoint_times_.clear();
+    for (const auto& context : contexts) contexts_[{context.device_id, context.point_key}] = context;
+    for (const auto& rule : rules) rules_[{rule.device_id, rule.point_key}] = rule;
+    for (const auto& state : states) states_[{state.device_id, state.point_key}] = state;
+    initialized_ = true;
+    status = synchronize_topology_locked(contexts, "拓扑失效", error_message);
+    const bool should_dispatch = begin_event_dispatch_locked();
+    lock.unlock();
+    mutation_lock.unlock();
+    if (should_dispatch) dispatch_pending_events();
+    return status;
 }
 
 // 判断报警评估器是否已初始化。
@@ -90,16 +158,25 @@ StatusCode AlarmEvaluator::synchronize_topology(
     const std::string& removal_reason,
     std::string* error_message)
 {
+    std::unique_lock<std::mutex> mutation_lock(mutation_mutex_);
     std::unique_lock<std::mutex> lock(mutex_);
-    const auto finish = [&](StatusCode status) {
-        const bool should_dispatch = begin_event_dispatch_locked();
-        lock.unlock();
-        if (should_dispatch) dispatch_pending_events();
-        return status;
-    };
+    const auto status = synchronize_topology_locked(contexts, removal_reason, error_message);
+    const bool should_dispatch = begin_event_dispatch_locked();
+    lock.unlock();
+    mutation_lock.unlock();
+    if (should_dispatch) dispatch_pending_events();
+    return status;
+}
+
+// 调用方已持有变更串行锁和状态锁时同步拓扑。
+StatusCode AlarmEvaluator::synchronize_topology_locked(
+    const std::vector<AlarmPointContext>& contexts,
+    const std::string& removal_reason,
+    std::string* error_message)
+{
     if (!initialized_ || store_ == nullptr) {
         if (error_message != nullptr) *error_message = "告警判定服务尚未初始化";
-        return finish(StatusCode::kInvalidState);
+        return StatusCode::kInvalidState;
     }
 
     std::map<Key, AlarmPointContext> next_contexts;
@@ -113,9 +190,9 @@ StatusCode AlarmEvaluator::synchronize_topology(
     for (const auto& key : invalid_keys) {
         const auto clear_status = clear_state_locked(
             key, removal_reason, time_utils::system_now_ms(), error_message);
-        if (!is_ok(clear_status)) return finish(clear_status);
+        if (!is_ok(clear_status)) return clear_status;
         const auto delete_status = store_->delete_rule(key.first, key.second, error_message);
-        if (!is_ok(delete_status)) return finish(delete_status);
+        if (!is_ok(delete_status)) return delete_status;
         rules_.erase(key);
         last_checkpoint_times_.erase(key);
     }
@@ -130,10 +207,10 @@ StatusCode AlarmEvaluator::synchronize_topology(
     for (const auto& key : stale_state_keys) {
         const auto clear_status = clear_state_locked(
             key, removal_reason, time_utils::system_now_ms(), error_message);
-        if (!is_ok(clear_status)) return finish(clear_status);
+        if (!is_ok(clear_status)) return clear_status;
     }
     contexts_ = std::move(next_contexts);
-    return finish(StatusCode::kOk);
+    return StatusCode::kOk;
 }
 
 // 列出规则。
@@ -199,10 +276,12 @@ StatusCode AlarmEvaluator::acknowledge_active_alarm(
         if (error_message != nullptr) *error_message = "设备、数据项、确认用户和告警输出不能为空";
         return StatusCode::kInvalidArgument;
     }
+    std::unique_lock<std::mutex> mutation_lock(mutation_mutex_);
     std::unique_lock<std::mutex> lock(mutex_);
     const auto finish = [&](StatusCode status) {
         const bool should_dispatch = begin_event_dispatch_locked();
         lock.unlock();
+        mutation_lock.unlock();
         if (should_dispatch) dispatch_pending_events();
         return status;
     };
@@ -260,10 +339,12 @@ StatusCode AlarmEvaluator::acknowledge_active_alarm(
 // 新增或更新规则。
 StatusCode AlarmEvaluator::upsert_rule(const AlarmRule& rule, const AlarmPointContext& context, std::string* error_message)
 {
+    std::unique_lock<std::mutex> mutation_lock(mutation_mutex_);
     std::unique_lock<std::mutex> lock(mutex_);
     const auto finish = [&](StatusCode result) {
         const bool should_dispatch = begin_event_dispatch_locked();
         lock.unlock();
+        mutation_lock.unlock();
         if (should_dispatch) dispatch_pending_events();
         return result;
     };
@@ -307,10 +388,12 @@ StatusCode AlarmEvaluator::delete_rule(
     const std::string& reason,
     std::string* error_message)
 {
+    std::unique_lock<std::mutex> mutation_lock(mutation_mutex_);
     std::unique_lock<std::mutex> lock(mutex_);
     const auto finish = [&](StatusCode status) {
         const bool should_dispatch = begin_event_dispatch_locked();
         lock.unlock();
+        mutation_lock.unlock();
         if (should_dispatch) dispatch_pending_events();
         return status;
     };
@@ -333,42 +416,127 @@ StatusCode AlarmEvaluator::delete_rule(
     return finish(StatusCode::kOk);
 }
 
-// 使用最新设备状态评估全部相关报警规则。
-void AlarmEvaluator::evaluate(const DeviceStatus& status)
+// 使用同一采集批次的设备状态原子评估全部相关告警规则。
+StatusCode AlarmEvaluator::evaluate_batch(
+    const std::vector<DeviceStatus>& statuses,
+    std::string* error_message)
 {
-    // 多区块设备可能只成功一部分区块；在线设备按点位自身质量判定，
-    // 不能因设备聚合状态为 partial 而丢弃成功区块中的有效点位。
-    if (!status.online) return;
-    std::unique_lock<std::mutex> lock(mutex_);
-    if (!initialized_ || store_ == nullptr) return;
-    for (const auto& point : status.points) {
-        if (!point.valid || point.quality != DataQuality::kGood || !std::isfinite(point.value)) continue;
-        const Key key{status.device_id, point.key};
-        const auto rule = rules_.find(key);
-        const auto context = contexts_.find(key);
-        if (rule == rules_.end() || context == contexts_.end() || !rule->second.enabled) continue;
-        evaluate_point_locked(
-            rule->second,
-            context->second,
-            point,
-            effective_timestamp(point, status.updated_at_ms));
+    std::unique_lock<std::mutex> mutation_lock(mutation_mutex_);
+    EvaluationPlan plan;
+    AlarmStore* store = nullptr;
+    {
+        // 本锁内只读取已提交状态并计算 overlay，不执行 SQLite I/O。
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!initialized_ || store_ == nullptr) {
+            if (error_message != nullptr) *error_message = "告警判定服务尚未初始化";
+            return StatusCode::kInvalidState;
+        }
+        store = store_;
+        const auto checkpoint_time = std::chrono::steady_clock::now();
+        // 多区块设备可能只成功一部分区块；在线设备按点位自身质量判定。
+        for (const auto& status : statuses) {
+            if (!status.online) continue;
+            for (const auto& point : status.points) {
+                if (!point.valid || point.quality != DataQuality::kGood || !std::isfinite(point.value)) continue;
+                const Key key{status.device_id, point.key};
+                const auto rule = rules_.find(key);
+                const auto context = contexts_.find(key);
+                if (rule == rules_.end() || context == contexts_.end() || !rule->second.enabled) continue;
+                evaluate_point_locked(
+                    rule->second,
+                    context->second,
+                    point,
+                    effective_timestamp(point, status.updated_at_ms),
+                    checkpoint_time,
+                    &plan);
+            }
+        }
     }
-    const bool should_dispatch = begin_event_dispatch_locked();
-    lock.unlock();
-    if (should_dispatch) dispatch_pending_events();
-}
 
-// 保存
-StatusCode AlarmEvaluator::save_now(std::string* error_message)
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!initialized_ || store_ == nullptr) return StatusCode::kOk;
-    for (const auto& item : states_) {
-        if (item.second.state == "normal") continue;
-        const auto status = store_->upsert_runtime_state(item.second, error_message);
+    std::vector<AlarmRuntimeState> upserts;
+    std::vector<AlarmRuntimeStateKey> deletes;
+    std::vector<ServiceEvent> events;
+    upserts.reserve(plan.persistence_updates.size());
+    deletes.reserve(plan.persistence_updates.size());
+    events.reserve(plan.events.size());
+    for (const auto& update : plan.persistence_updates) {
+        if (update.second.has_value()) {
+            upserts.push_back(*update.second);
+        } else {
+            deletes.push_back(AlarmRuntimeStateKey{update.first.first, update.first.second});
+        }
+    }
+    // 事件文本格式化不占用 evaluator 状态锁；数据库失败时这些对象仍只存在于局部计划中。
+    for (const auto& event : plan.events) {
+        if (event.kind == PlannedEvent::Kind::kTrigger) {
+            events.push_back(make_trigger_event(event.rule, event.state, event.context));
+        } else {
+            events.push_back(make_recovery_event(
+                event.rule,
+                event.state,
+                event.context,
+                event.reason,
+                event.timestamp_ms));
+        }
+    }
+    if (!upserts.empty() || !deletes.empty()) {
+        const auto status = store->apply_runtime_state_batch(upserts, deletes, error_message);
         if (!is_ok(status)) return status;
     }
+
+    bool should_dispatch = false;
+    {
+        // mutation_mutex_ 保证计划期间没有其他写者；SQLite 提交后再一次性发布内存状态。
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto& update : plan.state_updates) {
+            if (update.second.has_value()) {
+                states_[update.first] = std::move(*update.second);
+            } else {
+                states_.erase(update.first);
+            }
+        }
+        for (auto& update : plan.checkpoint_updates) {
+            if (update.second.has_value()) {
+                last_checkpoint_times_[update.first] = *update.second;
+            } else {
+                last_checkpoint_times_.erase(update.first);
+            }
+        }
+        for (auto& event : events) pending_events_.push_back(std::move(event));
+        should_dispatch = begin_event_dispatch_locked();
+    }
+    mutation_lock.unlock();
+    if (should_dispatch) dispatch_pending_events();
     return StatusCode::kOk;
+}
+
+// 保留单设备兼容入口，共用同一批处理提交语义。
+void AlarmEvaluator::evaluate(const DeviceStatus& status)
+{
+    if (!status.online) return;
+    std::string error;
+    const auto result = evaluate_batch(std::vector<DeviceStatus>{status}, &error);
+    if (!is_ok(result)) {
+        Logger::error("告警评估批处理失败：" + error);
+    }
+}
+
+// 保存当前告警评估时间。
+StatusCode AlarmEvaluator::save_now(std::string* error_message)
+{
+    std::lock_guard<std::mutex> mutation_lock(mutation_mutex_);
+    std::vector<AlarmRuntimeState> states;
+    AlarmStore* store = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!initialized_ || store_ == nullptr) return StatusCode::kOk;
+        store = store_;
+        states.reserve(states_.size());
+        for (const auto& item : states_) {
+            if (item.second.state != "normal") states.push_back(item.second);
+        }
+    }
+    return store->apply_runtime_state_batch(states, {}, error_message);
 }
 
 // 在持锁状态下持久化状态。
@@ -380,6 +548,57 @@ StatusCode AlarmEvaluator::persist_state_locked(const AlarmRuntimeState& state, 
     states_[key] = state;
     last_checkpoint_times_[key] = std::chrono::steady_clock::now();
     return StatusCode::kOk;
+}
+
+// 从本批 overlay 或已提交状态读取指定键。
+const AlarmRuntimeState* AlarmEvaluator::planned_state_locked(
+    const EvaluationPlan& plan,
+    const Key& key) const
+{
+    const auto planned = plan.state_updates.find(key);
+    if (planned != plan.state_updates.end()) {
+        return planned->second.has_value() ? &*planned->second : nullptr;
+    }
+    const auto current = states_.find(key);
+    return current == states_.end() ? nullptr : &current->second;
+}
+
+// 从本批 overlay 或已提交检查点读取指定键。
+const AlarmEvaluator::CheckpointTime* AlarmEvaluator::planned_checkpoint_locked(
+    const EvaluationPlan& plan,
+    const Key& key) const
+{
+    const auto planned = plan.checkpoint_updates.find(key);
+    if (planned != plan.checkpoint_updates.end()) {
+        return planned->second.has_value() ? &*planned->second : nullptr;
+    }
+    const auto current = last_checkpoint_times_.find(key);
+    return current == last_checkpoint_times_.end() ? nullptr : &current->second;
+}
+
+// 写入本批状态 overlay，持久化变更只保留每个键的最终操作。
+void AlarmEvaluator::plan_state_upsert_locked(
+    EvaluationPlan* plan,
+    const AlarmRuntimeState& state,
+    bool persist,
+    CheckpointTime checkpoint_time)
+{
+    if (plan == nullptr) return;
+    const Key key{state.device_id, state.point_key};
+    plan->state_updates[key] = state;
+    if (persist) {
+        plan->persistence_updates[key] = state;
+        plan->checkpoint_updates[key] = checkpoint_time;
+    }
+}
+
+// 在本批 overlay 中删除状态和检查点，并把最终持久化操作设为 delete。
+void AlarmEvaluator::plan_state_delete_locked(EvaluationPlan* plan, const Key& key)
+{
+    if (plan == nullptr) return;
+    plan->state_updates[key] = std::nullopt;
+    plan->checkpoint_updates[key] = std::nullopt;
+    plan->persistence_updates[key] = std::nullopt;
 }
 
 // 在持锁状态下竞争唯一事件分发者身份。
@@ -460,18 +679,7 @@ void AlarmEvaluator::queue_trigger_event_locked(
     const AlarmRuntimeState& state,
     const AlarmPointContext& context)
 {
-    ServiceEvent event;
-    event.timestamp_ms = state.last_evaluated_at_ms;
-    event.level = rule.level;
-    event.source = "data_alarm";
-    event.target_id = rule.device_id;
-    event.diagnosis.target_id = rule.point_key;
-    event.diagnosis.target_name = context.point_name;
-    event.summary = context.device_name + " " + context.point_name + direction_name(state.direction);
-    event.detail = "当前值 " + value_text(state.current_value, context.precision) + context.unit +
-                   "，阈值 " + value_text(state.threshold_value, context.precision) + context.unit +
-                   "，方向=" + (state.direction == "high" ? "高限" : "低限");
-    pending_events_.push_back(std::move(event));
+    pending_events_.push_back(make_trigger_event(rule, state, context));
 }
 
 // 排队记录确认事件。
@@ -479,18 +687,7 @@ void AlarmEvaluator::queue_acknowledgement_event_locked(
     const AlarmRuntimeState& state,
     const AlarmPointContext& context)
 {
-    ServiceEvent event;
-    event.timestamp_ms = state.acknowledged_at_ms;
-    event.level = "info";
-    event.source = "alarm_ack";
-    event.target_id = state.device_id;
-    event.diagnosis.target_id = state.point_key;
-    event.diagnosis.target_name = context.point_name;
-    event.summary = context.device_name + " " + context.point_name + "告警已确认";
-    event.detail = "确认用户 " + state.acknowledged_by +
-                   "，当前值 " + value_text(state.current_value, context.precision) + context.unit +
-                   "，阈值 " + value_text(state.threshold_value, context.precision) + context.unit;
-    pending_events_.push_back(std::move(event));
+    pending_events_.push_back(make_acknowledgement_event(state, context));
 }
 
 // 在持锁状态下生成告警恢复事件。
@@ -501,24 +698,7 @@ void AlarmEvaluator::queue_recovery_event_locked(
     const std::string& reason,
     TimestampMs timestamp_ms)
 {
-    const auto boundary = state.direction == "high"
-                              ? rule.high_threshold - rule.hysteresis
-                              : rule.low_threshold + rule.hysteresis;
-    const auto duration_ms = timestamp_ms >= state.active_since_ms ? timestamp_ms - state.active_since_ms : 0;
-    ServiceEvent event;
-    event.timestamp_ms = timestamp_ms;
-    event.level = "info";
-    event.source = "data_alarm";
-    event.target_id = rule.device_id;
-    event.diagnosis.target_id = rule.point_key;
-    event.diagnosis.target_name = context.point_name;
-    event.summary = context.device_name + " " + context.point_name + direction_name(state.direction) + "已恢复";
-    event.detail = "恢复值 " + value_text(state.current_value, context.precision) + context.unit +
-                   "，恢复边界 " + value_text(boundary, context.precision) + context.unit +
-                   "，原阈值 " + value_text(state.threshold_value, context.precision) + context.unit +
-                   "，持续 " + std::to_string(duration_ms) + "ms";
-    if (!reason.empty()) event.detail += "，解除原因=" + reason;
-    pending_events_.push_back(std::move(event));
+    pending_events_.push_back(make_recovery_event(rule, state, context, reason, timestamp_ms));
 }
 
 // 在持锁状态下评估点位。
@@ -526,18 +706,21 @@ void AlarmEvaluator::evaluate_point_locked(
     const AlarmRule& rule,
     const AlarmPointContext& context,
     const PointValue& point,
-    TimestampMs timestamp_ms)
+    TimestampMs timestamp_ms,
+    CheckpointTime checkpoint_time,
+    EvaluationPlan* plan)
 {
+    if (plan == nullptr) return;
     const Key key{rule.device_id, rule.point_key};
     const bool high = rule.high_enabled && point.value >= rule.high_threshold;
     const bool low = rule.low_enabled && point.value <= rule.low_threshold;
-    const auto current = states_.find(key);
-    if (current != states_.end() && timestamp_ms < current->second.last_evaluated_at_ms) {
+    const auto* current = planned_state_locked(*plan, key);
+    if (current != nullptr && timestamp_ms < current->last_evaluated_at_ms) {
         // 旧样本可能来自缓存或乱序设备时间戳，不能覆盖较新的告警状态。
         return;
     }
 
-    if (current == states_.end()) {
+    if (current == nullptr) {
         // 首次越限先进入 pending，除非规则要求 1 次即触发。
         if (!high && !low) return;
         AlarmRuntimeState next;
@@ -555,22 +738,20 @@ void AlarmEvaluator::evaluate_point_locked(
         } else {
             next.state = "pending";
         }
-        std::string error;
-        if (!is_ok(persist_state_locked(next, &error))) {
-            Logger::error("持久化告警触发状态失败：" + error);
-            return;
+        plan_state_upsert_locked(plan, next, true, checkpoint_time);
+        if (next.state == "active") {
+            plan->events.push_back(PlannedEvent{
+                PlannedEvent::Kind::kTrigger, rule, next, context, {}, timestamp_ms});
         }
-        if (next.state == "active") queue_trigger_event_locked(rule, next, context);
         return;
     }
 
-    const auto previous = current->second;
+    const auto previous = *current;
     if (previous.state == "pending") {
         // pending 要求连续同方向越限；恢复正常或方向切换都会重置计数。
         const std::string direction = high ? "high" : (low ? "low" : "none");
         if (direction == "none") {
-            std::string error;
-            if (!is_ok(clear_state_locked(key, "", timestamp_ms, &error))) Logger::error("清理 pending 告警状态失败：" + error);
+            plan_state_delete_locked(plan, key);
             return;
         }
         AlarmRuntimeState next = previous;
@@ -588,12 +769,11 @@ void AlarmEvaluator::evaluate_point_locked(
             next.state = "active";
             next.active_since_ms = timestamp_ms;
         }
-        std::string error;
-        if (!is_ok(persist_state_locked(next, &error))) {
-            Logger::error("持久化 pending 告警状态失败：" + error);
-            return;
+        plan_state_upsert_locked(plan, next, true, checkpoint_time);
+        if (next.state == "active") {
+            plan->events.push_back(PlannedEvent{
+                PlannedEvent::Kind::kTrigger, rule, next, context, {}, timestamp_ms});
         }
-        if (next.state == "active") queue_trigger_event_locked(rule, next, context);
         return;
     }
 
@@ -612,15 +792,9 @@ void AlarmEvaluator::evaluate_point_locked(
         ++next.consecutive_recovery_count;
         must_persist = true;
         if (next.consecutive_recovery_count >= rule.recovery_count) {
-            std::string error;
-            const auto delete_status = store_->delete_runtime_state(key.first, key.second, &error);
-            if (!is_ok(delete_status)) {
-                Logger::error("持久化告警恢复状态失败：" + error);
-                return;
-            }
-            queue_recovery_event_locked(rule, next, context, "", timestamp_ms);
-            states_.erase(key);
-            last_checkpoint_times_.erase(key);
+            plan->events.push_back(PlannedEvent{
+                PlannedEvent::Kind::kRecovery, rule, next, context, {}, timestamp_ms});
+            plan_state_delete_locked(plan, key);
             return;
         }
     } else if (next.consecutive_recovery_count != 0) {
@@ -628,18 +802,13 @@ void AlarmEvaluator::evaluate_point_locked(
         must_persist = true;
     }
 
-    const auto checkpoint = last_checkpoint_times_.find(key);
+    const auto* checkpoint = planned_checkpoint_locked(*plan, key);
     // 活动告警即使未恢复，也定期落库当前值和评估时间，重启后页面不会长时间停在旧值。
-    if (!must_persist && (checkpoint == last_checkpoint_times_.end() ||
-        std::chrono::steady_clock::now() - checkpoint->second >= kActiveCheckpointInterval)) {
+    if (!must_persist && (checkpoint == nullptr ||
+        checkpoint_time - *checkpoint >= kActiveCheckpointInterval)) {
         must_persist = true;
     }
-    if (must_persist) {
-        std::string error;
-        if (!is_ok(persist_state_locked(next, &error))) Logger::error("持久化活动告警检查点失败：" + error);
-    } else {
-        states_[key] = next;
-    }
+    plan_state_upsert_locked(plan, next, must_persist, checkpoint_time);
 }
 
 }  // namespace edge_controller

@@ -228,13 +228,22 @@ StatusCode BackendService::export_history_records(
     }
 
     const auto requested_limit = query.limit == 0 ? 500U : std::min(query.limit, 5000U);
-    std::uint32_t enabled_offset = 0;
+    std::uint64_t enabled_offset = 0;
     HistoryExportQuery page_query = query;
-    page_query.limit = 5000;
+    // HistoryStore 单批上限为 1000；使用 keyset 在同一请求内稳定扫描，避免递增
+    // OFFSET 在并发清理/写入时位移，也避免把 1000 条误判成不足原 5000 条而提前结束。
+    page_query.limit = 1000;
     page_query.offset = 0;
+    HistoryExportCursor cursor;
     while (records->size() < requested_limit) {
         std::vector<HistoryRecord> page;
-        const auto status = history_store_.export_records(page_query, &page, error_message);
+        HistoryExportCursor next_cursor;
+        const auto status = history_store_.export_records_after(
+            page_query,
+            cursor.valid ? &cursor : nullptr,
+            &page,
+            &next_cursor,
+            error_message);
         if (!is_ok(status)) return status;
         for (auto& record : page) {
             if (!history_record_enabled(history_enabled, record)) continue;
@@ -243,7 +252,8 @@ StatusCode BackendService::export_history_records(
             if (records->size() >= requested_limit) break;
         }
         if (page.size() < page_query.limit || records->size() >= requested_limit) break;
-        page_query.offset += static_cast<std::uint32_t>(page.size());
+        if (!next_cursor.valid) break;
+        cursor = std::move(next_cursor);
     }
     return StatusCode::kOk;
 }

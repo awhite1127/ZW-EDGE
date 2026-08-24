@@ -439,6 +439,16 @@
         replaceContents(target, fragment);
     }
 
+    // 服务端 flash 和页面级错误位于稳定 shell 中；软导航提交时必须和主内容一起更新。
+    function syncToastContainer(snapshot) {
+        var nextContainer = snapshot.querySelector("[data-toast-container]");
+        var currentContainer = document.querySelector("[data-toast-container]");
+        if (!nextContainer || !currentContainer) return null;
+        var replacement = document.importNode(nextContainer, true);
+        replaceElement(currentContainer, replacement);
+        return replacement;
+    }
+
     function updateStableShell(snapshot, targetURL) {
         var nextContext = snapshot.querySelector(".topbar-page-context");
         var currentContext = document.querySelector(".topbar-page-context");
@@ -465,11 +475,14 @@
         var currentMeta = document.querySelector('meta[name="csrf-token"]');
         if (nextMeta && currentMeta) currentMeta.content = nextMeta.content;
 
+        var committedToastContainer = syncToastContainer(snapshot);
+
         document.title = snapshot.title || document.title;
         document.body.dataset.pageKey = snapshot.body.dataset.pageKey || pageKeyForPath(targetURL.pathname);
         document.body.dataset.currentPath = snapshot.body.dataset.currentPath || targetURL.pathname + targetURL.search;
         document.body.dataset.passwordChangeRecommended = snapshot.body.dataset.passwordChangeRecommended || "false";
         updatePrimaryNavigation(document.body.dataset.pageKey, targetURL);
+        return committedToastContainer;
     }
 
     function ensureControllerScripts(snapshot) {
@@ -618,13 +631,16 @@
                 }
                 metrics.parse = now() - parseStart;
                 var commitStart = now();
-                updateStableShell(snapshot, targetURL);
+                var committedToastContainer = updateStableShell(snapshot, targetURL);
                 importChildren(nextContent, currentContent);
                 metrics.commit = now() - commitStart;
                 if (!options || options.history !== "none") {
                     window.history.pushState({ edgeSoftNavigation: true }, "", targetURL.href);
                 }
-                if (EdgeApp.hydratePage) EdgeApp.hydratePage(currentContent);
+                if (EdgeApp.hydratePage) {
+                    EdgeApp.hydratePage(currentContent);
+                    if (committedToastContainer) EdgeApp.hydratePage(committedToastContainer);
+                }
                 clearNavigationPending();
                 enterCommittedContent(currentContent, sameSection);
                 metrics.contentVisible = now() - metrics.navigationStart;

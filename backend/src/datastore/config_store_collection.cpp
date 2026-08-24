@@ -156,14 +156,19 @@ StatusCode ConfigStore::save_channels_locked(
         }
     }
 
-    const auto begin_status = execute_sql_locked("BEGIN IMMEDIATE TRANSACTION;", error_message);
-    if (!is_ok(begin_status)) {
-        return begin_status;
+    const bool owns_transaction = sqlite3_get_autocommit(database_) != 0;
+    if (owns_transaction) {
+        const auto begin_status = execute_sql_locked("BEGIN IMMEDIATE TRANSACTION;", error_message);
+        if (!is_ok(begin_status)) {
+            return begin_status;
+        }
     }
 
     auto rollback = [&]() {
-        std::string ignored;
-        execute_sql_locked("ROLLBACK;", &ignored);
+        if (owns_transaction) {
+            std::string ignored;
+            execute_sql_locked("ROLLBACK;", &ignored);
+        }
     };
 
     std::string delete_error;
@@ -228,10 +233,12 @@ StatusCode ConfigStore::save_channels_locked(
         sqlite3_clear_bindings(statement.get());
     }
 
-    const auto commit_status = execute_sql_locked("COMMIT;", error_message);
-    if (!is_ok(commit_status)) {
-        rollback();
-        return commit_status;
+    if (owns_transaction) {
+        const auto commit_status = execute_sql_locked("COMMIT;", error_message);
+        if (!is_ok(commit_status)) {
+            rollback();
+            return commit_status;
+        }
     }
     return StatusCode::kOk;
 }
@@ -332,14 +339,19 @@ StatusCode ConfigStore::save_masters_locked(
         }
     }
 
-    const auto begin_status = execute_sql_locked("BEGIN IMMEDIATE TRANSACTION;", error_message);
-    if (!is_ok(begin_status)) {
-        return begin_status;
+    const bool owns_transaction = sqlite3_get_autocommit(database_) != 0;
+    if (owns_transaction) {
+        const auto begin_status = execute_sql_locked("BEGIN IMMEDIATE TRANSACTION;", error_message);
+        if (!is_ok(begin_status)) {
+            return begin_status;
+        }
     }
 
     auto rollback = [&]() {
-        std::string ignored;
-        execute_sql_locked("ROLLBACK;", &ignored);
+        if (owns_transaction) {
+            std::string ignored;
+            execute_sql_locked("ROLLBACK;", &ignored);
+        }
     };
 
     std::string delete_error;
@@ -402,10 +414,12 @@ StatusCode ConfigStore::save_masters_locked(
         sqlite3_clear_bindings(statement.get());
     }
 
-    const auto commit_status = execute_sql_locked("COMMIT;", error_message);
-    if (!is_ok(commit_status)) {
-        rollback();
-        return commit_status;
+    if (owns_transaction) {
+        const auto commit_status = execute_sql_locked("COMMIT;", error_message);
+        if (!is_ok(commit_status)) {
+            rollback();
+            return commit_status;
+        }
     }
     return StatusCode::kOk;
 }

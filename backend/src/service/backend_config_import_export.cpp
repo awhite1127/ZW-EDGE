@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "common/logger.h"
+#include "datastore/config_import_transaction.h"
 #include "datastore/config_store_internal.h"
 #include "common/time_utils.h"
 #include "service/backend_service_internal.h"
@@ -489,66 +490,32 @@ StatusCode BackendService::import_system_config(
     MqttSettings next_mqtt = validated.mqtt_settings;
     next_mqtt.password = system_config_.mqtt_settings.password;
 
-    auto template_ids = [](const std::vector<DeviceTemplateDefinition>& templates) {
-        std::vector<std::string> ids;
-        ids.reserve(templates.size());
-        for (const auto& device_template : templates) ids.push_back(device_template.template_id);
-        return ids;
-    };
     auto restore_previous_persisted_config = [&]() {
         RestoreOutcome restore;
+        ConfigImportPersistencePayload previous_payload;
+        previous_payload.system_settings = previous_system_config.settings;
+        previous_payload.time_settings = previous_system_config.time_settings;
+        previous_payload.network_settings = previous_system_config.network_settings;
+        previous_payload.network_settings_explicitly_configured =
+            previous_system_config.network_settings_explicitly_configured;
+        previous_payload.mqtt_settings = previous_system_config.mqtt_settings;
+        previous_payload.custom_device_types = previous_custom_device_types;
+        previous_payload.channels = previous_system_config.channels;
+        previous_payload.masters = previous_system_config.master_nodes;
+        previous_payload.replace_alarm_data = request.bundle.alarm_rules_included;
+        previous_payload.alarm_rules = previous_alarm_rules;
+        previous_payload.alarm_runtime_states = previous_alarm_runtime_states;
+        previous_payload.modbus_server_settings = previous_modbus_settings;
+        previous_payload.modbus_register_mappings = previous_modbus_mappings;
+
         std::string restore_error;
-        auto status = device_template_store_.upsert_custom_templates(
-            previous_custom_device_types, &restore_error);
-        restore.record(status, "恢复原自定义设备类型失败", restore_error);
-        restore_error.clear();
-        status = config_store_.save_system_settings(previous_system_config.settings, &restore_error);
-        restore.record(status, "恢复原系统设置失败", restore_error);
-        restore_error.clear();
-        status = config_store_.save_network_settings_state(
-            previous_system_config.network_settings,
-            previous_system_config.network_settings_explicitly_configured,
+        const auto status = ConfigImportTransaction::apply(
+            config_store_,
+            device_template_store_,
+            alarm_store_,
+            previous_payload,
             &restore_error);
-        restore.record(status, "恢复原网络设置失败", restore_error);
-        restore_error.clear();
-        status = config_store_.save_time_settings(previous_system_config.time_settings, &restore_error);
-        restore.record(status, "恢复原时间设置失败", restore_error);
-        restore_error.clear();
-        status = config_store_.save_mqtt_settings(previous_system_config.mqtt_settings, &restore_error);
-        restore.record(status, "恢复原 MQTT 设置失败", restore_error);
-        restore_error.clear();
-        status = config_store_.save_channels(previous_system_config.channels, &restore_error);
-        restore.record(status, "恢复原通道配置失败", restore_error);
-        restore_error.clear();
-        status = config_store_.save_masters(previous_system_config.master_nodes, &restore_error);
-        restore.record(status, "恢复原主站配置失败", restore_error);
-        restore_error.clear();
-        status = device_template_store_.prune_custom_templates(
-            template_ids(previous_custom_device_types), &restore_error);
-        restore.record(status, "清理导入产生的设备类型失败", restore_error);
-        restore_error.clear();
-        status = alarm_store_.clear_rules(&restore_error);
-        restore.record(status, "清理导入告警规则失败", restore_error);
-        if (is_ok(status)) {
-            for (const auto& rule : previous_alarm_rules) {
-                restore_error.clear();
-                status = alarm_store_.upsert_rule(rule, &restore_error);
-                restore.record(status, "恢复原告警规则失败", restore_error);
-                if (!is_ok(status)) break;
-            }
-        }
-        if (request.bundle.alarm_rules_included) {
-            restore_error.clear();
-            status = alarm_store_.replace_runtime_states(
-                previous_alarm_runtime_states, &restore_error);
-            restore.record(status, "恢复原告警运行状态失败", restore_error);
-        }
-        restore_error.clear();
-        status = config_store_.save_modbus_server_settings(previous_modbus_settings, &restore_error);
-        restore.record(status, "恢复原 Modbus Server 设置失败", restore_error);
-        restore_error.clear();
-        status = config_store_.replace_modbus_register_mappings(previous_modbus_mappings, &restore_error);
-        restore.record(status, "恢复原 Modbus 映射失败", restore_error);
+        restore.record(status, "原子恢复导入前持久化配置失败", restore_error);
         return restore;
     };
 
@@ -574,71 +541,35 @@ StatusCode BackendService::import_system_config(
         }
     }
 
+    ConfigImportPersistencePayload imported_payload;
+    imported_payload.system_settings = validated.system_settings;
+    imported_payload.time_settings = validated.time_settings;
+    imported_payload.network_settings = validated.network_settings;
+    imported_payload.network_settings_explicitly_configured = true;
+    imported_payload.mqtt_settings = next_mqtt;
+    imported_payload.custom_device_types = validated.custom_device_types;
+    imported_payload.channels = validated.channels;
+    imported_payload.masters = validated.masters;
+    imported_payload.replace_alarm_data = request.bundle.alarm_rules_included;
+    imported_payload.alarm_rules = request.bundle.alarm_rules;
+    imported_payload.modbus_server_settings = validated.modbus_server_settings;
+    imported_payload.modbus_register_mappings = validated.modbus_register_mappings;
+
     std::string write_error;
     lock.unlock();
-    auto write_status = device_template_store_.upsert_custom_templates(
-        validated.custom_device_types, &write_error);
-    if (is_ok(write_status)) {
-        write_status = config_store_.save_system_settings(validated.system_settings, &write_error);
-    }
-    if (is_ok(write_status)) {
-        write_status = config_store_.save_network_settings_state(validated.network_settings, true, &write_error);
-    }
-    if (is_ok(write_status)) {
-        write_status = config_store_.save_time_settings(validated.time_settings, &write_error);
-    }
-    if (is_ok(write_status)) {
-        write_status = config_store_.save_mqtt_settings(next_mqtt, &write_error);
-    }
-    if (is_ok(write_status)) {
-        write_status = config_store_.save_channels(validated.channels, &write_error);
-    }
-    if (is_ok(write_status)) {
-        write_status = config_store_.save_masters(validated.masters, &write_error);
-    }
-    if (is_ok(write_status)) {
-        write_status = device_template_store_.prune_custom_templates(
-            template_ids(validated.custom_device_types), &write_error);
-    }
-    if (is_ok(write_status) && request.bundle.alarm_rules_included) {
-        write_status = alarm_store_.clear_rules(&write_error);
-    }
-    if (is_ok(write_status) && request.bundle.alarm_rules_included) {
-        write_status = alarm_store_.clear_runtime_states(&write_error);
-    }
-    if (is_ok(write_status) && request.bundle.alarm_rules_included) {
-        for (const auto& rule : request.bundle.alarm_rules) {
-            write_status = alarm_store_.upsert_rule(rule, &write_error);
-            if (!is_ok(write_status)) {
-                break;
-            }
-        }
-    }
-    // Modbus 配置最后写入；前面任一必需配置失败时不会留下未应用的新监听或新 Bank。
-    if (is_ok(write_status)) {
-        write_status = config_store_.save_modbus_server_settings(validated.modbus_server_settings, &write_error);
-    }
-    if (is_ok(write_status)) {
-        write_status = config_store_.replace_modbus_register_mappings(
-            validated.modbus_register_mappings, &write_error);
-    }
-    RestoreOutcome write_restore;
-    if (!is_ok(write_status)) write_restore = restore_previous_persisted_config();
+    const auto write_status = ConfigImportTransaction::apply(
+        config_store_, device_template_store_, alarm_store_, imported_payload, &write_error);
     lock.lock();
 
     if (!is_ok(write_status)) {
         std::string message = config_write_error_message("导入配置写入失败", write_error);
-        if (write_restore.succeeded()) {
-            message += "；已恢复导入前配置";
-        } else {
-            message += "；恢复导入前配置未完整成功：" + write_restore.details;
-        }
+        message += "；整套 SQLite 事务已回滚，持久化配置未改变";
         return fail_config_apply_locked(
             write_status,
             message,
             was_polling_running,
             error_message,
-            write_restore.succeeded());
+            true);
     }
 
     std::vector<std::string> reload_errors;

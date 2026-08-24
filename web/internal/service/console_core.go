@@ -5,8 +5,10 @@ package service
 
 import (
 	"context"
-	"edge-web/internal/model"
 	"sync"
+	"time"
+
+	"edge-web/internal/model"
 )
 
 type backendAPI interface {
@@ -43,6 +45,7 @@ type backendRuntimeAPI interface {
 // backendEventHistoryAPI 统一事件、报警和历史数据能力，批量摘要是当前正式协议的一部分。
 type backendEventHistoryAPI interface {
 	ListRecentEvents(ctx context.Context) ([]model.ServiceEvent, error)
+	QueryServiceEvents(ctx context.Context, query model.EventHistoryQuery) (model.EventHistoryResult, error)
 	ExportServiceEvents(ctx context.Context, query model.EventExportQuery) ([]model.ServiceEvent, error)
 	ClearRecentEvents(ctx context.Context) (model.ActionFeedback, error)
 	ListActiveAlarms(ctx context.Context) ([]model.ActiveAlarm, error)
@@ -122,10 +125,14 @@ type backendUpdateAPI interface {
 }
 
 type ConsoleService struct {
-	backend                    backendAPI
-	realtimeTemplateMu         sync.RWMutex
-	realtimeTemplateGeneration uint64
-	realtimeTemplates          []model.DeviceTemplateDefinition
+	backend                     backendAPI
+	realtimeTemplateMu          sync.RWMutex
+	realtimeTemplateGeneration  uint64
+	realtimeTemplates           []model.DeviceTemplateDefinition
+	systemDisplayNameMu         sync.Mutex
+	systemDisplayName           string
+	systemDisplayNameExpiresAt  time.Time
+	systemDisplayNameGeneration uint64
 }
 
 type collectionObjectState string

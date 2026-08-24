@@ -1,4 +1,4 @@
-// 事件 IPC handler：提供最近事件、分页导出和清理动作，事件聚合逻辑保留在仓库层。
+// 事件 IPC handler：提供最近事件、历史分页、导出和清理动作，事件聚合逻辑保留在仓库层。
 #include "interface/ipc_handlers.h"
 
 #include <optional>
@@ -35,7 +35,22 @@ bool handle_events_request(const IpcHandlerContext& context, std::string* respon
         *response_json = ipc_protocol::build_success_response(
             id_json,
             ipc_json::to_json_array(events));
+        return true;
+    }
+
+    if (method == "query_service_events") {
+        const auto query = extract_event_history_query(root);
+        EventHistoryResult result;
+        std::string event_error;
+        const auto event_status = backend_service_->query_service_events(query, &result, &event_error);
+        if (!is_ok(event_status)) {
+            *response_json = ipc_protocol::build_error_response(id_json, status_code_string(event_status), event_error);
             return true;
+        }
+        *response_json = ipc_protocol::build_success_response(
+            id_json,
+            ipc_json::to_json(result));
+        return true;
     }
 
     if (method == "export_service_events") {
@@ -50,7 +65,7 @@ bool handle_events_request(const IpcHandlerContext& context, std::string* respon
         *response_json = ipc_protocol::build_success_response(
             id_json,
             ipc_json::to_json_array(events));
-            return true;
+        return true;
     }
 
     if (method == "clear_recent_events") {

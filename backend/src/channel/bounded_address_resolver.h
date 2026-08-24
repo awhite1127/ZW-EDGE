@@ -42,4 +42,16 @@ AddressResolutionResult resolve_addresses_until(
     int wake_fd,
     AddressResolverFunction resolver = nullptr);
 
+#if defined(__linux__)
+// edge-controller 内部 exec helper 的固定输出描述符与入口。helper 在全新进程映像中
+// 执行 NSS/getaddrinfo，避免多线程父进程 fork 后进入非 async-signal-safe 代码。
+inline constexpr int kAddressResolverHelperOutputFd = 3;
+inline constexpr const char* kAddressResolverHelperArgument = "--internal-address-resolver";
+
+[[noreturn]] void run_address_resolver_helper(
+    const std::string& host,
+    const std::string& service,
+    int output_fd = kAddressResolverHelperOutputFd);
+#endif
+
 }  // namespace edge_controller::channel_internal

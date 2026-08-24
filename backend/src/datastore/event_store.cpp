@@ -18,6 +18,8 @@ constexpr TimestampMs kDuplicateEventCountIntervalMs = 15ULL * 60ULL * 1000ULL;
 constexpr std::size_t kMaxEventRecords = 5000;
 constexpr std::uint32_t kDefaultExportLimit = 500;
 constexpr std::uint32_t kMaxExportLimit = 1000;
+constexpr std::uint32_t kDefaultHistoryPageSize = 10;
+constexpr std::uint32_t kMaxHistoryPageSize = 50;
 constexpr int kCurrentEventsDatabaseVersion = 1;
 
 using sqlite_helpers::Statement;
@@ -129,6 +131,67 @@ std::string escape_like_pattern(const std::string& value)
         escaped.push_back(ch);
     }
     return "%" + escaped + "%";
+}
+
+struct EventHistoryFilter {
+    std::string level;
+    std::string source;
+    TimestampMs cutoff{0};
+    std::string search_pattern;
+    bool has_level{false};
+};
+
+// 构造历史页的 SQL WHERE 片段。页面搜索字段与旧 Go 内存筛选保持一致。
+std::string event_history_filter_sql(const EventHistoryFilter& filter)
+{
+    std::string sql = " WHERE 1=1";
+    if (filter.has_level) {
+        if (filter.level == "warning" || filter.level == "warn") {
+            sql += " AND lower(trim(level)) IN ('warning','warn')";
+        } else if (filter.level == "info") {
+            sql += " AND lower(trim(level)) NOT IN ('error','warning','warn')";
+        } else {
+            sql += " AND lower(trim(level)) = ?";
+        }
+    }
+    if (!filter.source.empty()) {
+        sql += " AND lower(trim(source)) = ?";
+    }
+    if (filter.cutoff > 0) {
+        sql += " AND timestamp_ms >= ?";
+    }
+    if (!filter.search_pattern.empty()) {
+        sql +=
+            " AND (summary LIKE ? ESCAPE '\\' OR detail LIKE ? ESCAPE '\\' "
+            "OR target_id LIKE ? ESCAPE '\\' OR diagnosis_target_id LIKE ? ESCAPE '\\' "
+            "OR diagnosis_target_name LIKE ? ESCAPE '\\' OR diagnosis_error_code LIKE ? ESCAPE '\\' "
+            "OR diagnosis_message LIKE ? ESCAPE '\\' OR diagnosis_suggestion LIKE ? ESCAPE '\\')";
+    }
+    return sql;
+}
+
+// 按 event_history_filter_sql 的占位顺序绑定参数。
+bool bind_event_history_filter(sqlite3_stmt* statement, const EventHistoryFilter& filter)
+{
+    int index = 1;
+    if (filter.has_level && filter.level != "warning" && filter.level != "warn" && filter.level != "info" &&
+        !bind_text(statement, index++, filter.level)) {
+        return false;
+    }
+    if (!filter.source.empty() && !bind_text(statement, index++, filter.source)) {
+        return false;
+    }
+    if (filter.cutoff > 0 && !bind_int64(statement, index++, filter.cutoff)) {
+        return false;
+    }
+    if (!filter.search_pattern.empty()) {
+        for (int field = 0; field < 8; ++field) {
+            if (!bind_text(statement, index++, filter.search_pattern)) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 // 绑定事件。
@@ -466,6 +529,114 @@ StatusCode EventStore::list_recent(std::size_t limit, std::vector<ServiceEvent>*
         output->push_back(read_event(stmt.get()));
     }
     return rc == SQLITE_DONE ? StatusCode::kOk : fail(error, "查询历史事件失败: " + db_error(database_));
+}
+
+// 在同一个 EventStore 临界区中返回统计、匹配总数和当前页，避免页面看到跨写入时点的结果。
+StatusCode EventStore::query_history(
+    const EventHistoryQuery& query,
+    EventHistoryResult* output,
+    std::string* error) const
+{
+    if (output == nullptr) {
+        return fail(error, "历史事件分页输出参数为空", StatusCode::kInvalidArgument);
+    }
+    *output = {};
+
+    EventHistoryFilter filter;
+    filter.level = lowercase(query.level);
+    filter.source = lowercase(query.source);
+    if (filter.source == "all") {
+        filter.source.clear();
+    }
+    if (!is_export_level_filter(filter.level)) {
+        return fail(error, "历史事件级别筛选非法", StatusCode::kInvalidArgument);
+    }
+    if (!is_valid_export_time_range(query.time_range)) {
+        return fail(error, "历史事件时间范围非法", StatusCode::kInvalidArgument);
+    }
+    filter.has_level = !filter.level.empty() && filter.level != "all";
+    filter.cutoff = export_time_range_cutoff(query.time_range);
+    if (!query.search.empty()) {
+        filter.search_pattern = escape_like_pattern(query.search);
+    }
+
+    const auto page_size = query.page_size == 0
+                               ? kDefaultHistoryPageSize
+                               : std::min(query.page_size, kMaxHistoryPageSize);
+    const auto requested_page = query.page == 0 ? 1U : query.page;
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto status = flush_dirty_locked(error);
+    if (!is_ok(status)) return status;
+    if (!available_locked(error)) return StatusCode::kInvalidState;
+
+    // 级别统计不受当前筛选影响，与旧页面顶部卡片语义一致；未知级别按 info 展示。
+    Statement level_stats(
+        database_,
+        "SELECT "
+        "SUM(CASE WHEN lower(trim(level))='error' THEN 1 ELSE 0 END),"
+        "SUM(CASE WHEN lower(trim(level)) IN ('warning','warn') THEN 1 ELSE 0 END),"
+        "SUM(CASE WHEN lower(trim(level)) NOT IN ('error','warning','warn') THEN 1 ELSE 0 END) "
+        "FROM service_events;");
+    if (!level_stats.ok() || sqlite3_step(level_stats.get()) != SQLITE_ROW) {
+        return fail(error, "统计历史事件级别失败: " + db_error(database_));
+    }
+    output->level_stats.error = static_cast<std::uint64_t>(sqlite3_column_int64(level_stats.get(), 0));
+    output->level_stats.warning = static_cast<std::uint64_t>(sqlite3_column_int64(level_stats.get(), 1));
+    output->level_stats.info = static_cast<std::uint64_t>(sqlite3_column_int64(level_stats.get(), 2));
+
+    Statement source_stats(
+        database_,
+        "SELECT lower(trim(source)),COUNT(*) FROM service_events "
+        "GROUP BY lower(trim(source)) ORDER BY lower(trim(source));");
+    if (!source_stats.ok()) {
+        return fail(error, "准备历史事件来源统计失败: " + db_error(database_));
+    }
+    int step_status = SQLITE_OK;
+    while ((step_status = sqlite3_step(source_stats.get())) == SQLITE_ROW) {
+        output->source_stats.push_back(EventSourceStat{
+            text_column(source_stats.get(), 0),
+            static_cast<std::uint64_t>(sqlite3_column_int64(source_stats.get(), 1)),
+        });
+    }
+    if (step_status != SQLITE_DONE) {
+        return fail(error, "统计历史事件来源失败: " + db_error(database_));
+    }
+
+    const auto where_sql = event_history_filter_sql(filter);
+    const auto count_sql = "SELECT COUNT(*) FROM service_events" + where_sql + ";";
+    Statement count(database_, count_sql.c_str());
+    if (!count.ok() || !bind_event_history_filter(count.get(), filter) ||
+        sqlite3_step(count.get()) != SQLITE_ROW) {
+        return fail(error, "统计筛选后历史事件失败: " + db_error(database_));
+    }
+    output->total = static_cast<std::uint64_t>(sqlite3_column_int64(count.get(), 0));
+    if (output->total == 0) {
+        return StatusCode::kOk;
+    }
+
+    const auto total_pages = (output->total + page_size - 1U) / page_size;
+    const auto page = std::min<std::uint64_t>(requested_page, total_pages);
+    const auto offset = (page - 1U) * page_size;
+    const std::string rows_sql =
+        "SELECT event_id,first_timestamp_ms,timestamp_ms,level,source,target_id,"
+        "diagnosis_level,diagnosis_target_id,diagnosis_target_name,diagnosis_status,"
+        "diagnosis_error_code,diagnosis_message,diagnosis_suggestion,"
+        "diagnosis_last_success_time_ms,diagnosis_last_error_time_ms,"
+        "diagnosis_consecutive_failures,summary,detail,occurrence_count "
+        "FROM service_events" + where_sql +
+        " ORDER BY timestamp_ms DESC,event_id DESC LIMIT " + std::to_string(page_size) +
+        " OFFSET " + std::to_string(offset) + ";";
+    Statement rows(database_, rows_sql.c_str());
+    if (!rows.ok() || !bind_event_history_filter(rows.get(), filter)) {
+        return fail(error, "准备历史事件分页查询失败: " + db_error(database_));
+    }
+    while ((step_status = sqlite3_step(rows.get())) == SQLITE_ROW) {
+        output->rows.push_back(read_event(rows.get()));
+    }
+    return step_status == SQLITE_DONE
+               ? StatusCode::kOk
+               : fail(error, "查询历史事件分页记录失败: " + db_error(database_));
 }
 
 // 导出事件。

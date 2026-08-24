@@ -5,47 +5,14 @@ package httpserver
 import (
 	"context"
 	"encoding/json"
-	"io/fs"
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
-	webassets "edge-web"
 	"edge-web/internal/model"
 )
-
-func staticFileServer(staticDir string) http.Handler {
-	if override := strings.TrimSpace(os.Getenv("EDGE_WEB_STATIC_DIR")); override != "" {
-		return http.FileServer(http.Dir(override))
-	}
-
-	staticFS, err := fs.Sub(webassets.StaticFS, "static")
-	if err != nil {
-		log.Printf("加载嵌入静态资源失败：%v", err)
-		if strings.TrimSpace(staticDir) != "" {
-			return http.FileServer(http.Dir(staticDir))
-		}
-		return http.NotFoundHandler()
-	}
-	return http.FileServer(http.FS(staticFS))
-}
-
-// staticAssetCacheMiddleware 根据资源版本参数设置缓存策略。
-// 页面模板为所有可执行静态资源携带版本号；未带版本号的资源只做短缓存并强制重新验证，
-// 避免升级后浏览器长期沿用旧文件。
-func staticAssetCacheMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.TrimSpace(r.URL.Query().Get("v")) != "" {
-			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-		} else {
-			w.Header().Set("Cache-Control", "public, max-age=300, must-revalidate")
-		}
-		next.ServeHTTP(w, r)
-	})
-}
 
 func logSlowRealtimeViewBuild(elapsed time.Duration, err error) {
 	if elapsed < 200*time.Millisecond {
@@ -135,11 +102,11 @@ func applySystemDisplayName(base *model.BasePageData, settings model.SystemSetti
 }
 
 func (s *Server) applySystemDisplayNameFromBackend(ctx context.Context, base *model.BasePageData) {
-	settings, err := s.console.GetSystemSettings(ctx)
+	displayName, err := s.console.GetSystemDisplayName(ctx)
 	if err != nil {
 		return
 	}
-	applySystemDisplayName(base, settings)
+	applySystemDisplayName(base, model.SystemSettings{DisplayName: displayName})
 }
 
 func (s *Server) applyPollingState(ctx context.Context, base *model.BasePageData) {

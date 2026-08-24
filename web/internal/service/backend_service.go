@@ -213,6 +213,16 @@ func (s *BackendService) ListRecentEvents(ctx context.Context) ([]model.ServiceE
 	return result, err
 }
 
+// QueryServiceEvents 让后端在完整事件库上执行筛选、统计和分页。
+func (s *BackendService) QueryServiceEvents(
+	ctx context.Context,
+	query model.EventHistoryQuery,
+) (model.EventHistoryResult, error) {
+	var result model.EventHistoryResult
+	err := s.client.Call(ctx, "query_service_events", query, &result)
+	return result, err
+}
+
 func (s *BackendService) ExportServiceEvents(
 	ctx context.Context,
 	query model.EventExportQuery,

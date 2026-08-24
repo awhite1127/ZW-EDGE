@@ -507,6 +507,97 @@ StatusCode DeviceTemplateStore::prune_custom_templates(
     return StatusCode::kOk;
 }
 
+// 使用调用方的共享事务完整替换自定义设备类型；提交前不发布全局模板快照。
+StatusCode DeviceTemplateStore::replace_custom_templates_for_import_locked(
+    const std::vector<DeviceTemplateDefinition>& device_templates,
+    std::vector<DeviceTemplateDefinition>* templates,
+    std::string* error_message)
+{
+    if (templates == nullptr) {
+        if (error_message != nullptr) *error_message = "缺少导入后设备模板快照输出参数";
+        return StatusCode::kInvalidArgument;
+    }
+    if (!database_available_locked(error_message)) return StatusCode::kInvalidState;
+
+    std::set<std::string> keep_template_ids;
+    for (const auto& device_template : device_templates) {
+        std::string validation_error;
+        const auto validation_status =
+            validate_template_locked(device_template, false, &validation_error);
+        if (!is_ok(validation_status)) {
+            if (error_message != nullptr) {
+                *error_message = "设备类型“" + device_template.display_name + "”（" +
+                                 device_template.template_id + "）无效：" + validation_error;
+            }
+            return validation_status;
+        }
+        const auto template_id = trim_copy(device_template.template_id);
+        if (!keep_template_ids.insert(template_id).second) {
+            if (error_message != nullptr) {
+                *error_message = "自定义设备类型标识重复：" + device_template.template_id;
+            }
+            return StatusCode::kInvalidArgument;
+        }
+        std::string write_error;
+        const auto write_status = upsert_custom_template_locked(device_template, &write_error);
+        if (!is_ok(write_status)) {
+            if (error_message != nullptr) {
+                *error_message = write_error.empty() ? "写入自定义设备类型失败" : write_error;
+            }
+            return write_status;
+        }
+    }
+
+    std::vector<std::string> remove_ids;
+    {
+        Statement list_statement(
+            database_, "SELECT template_id FROM device_templates WHERE builtin=0 ORDER BY template_id;");
+        if (!list_statement.ok()) {
+            if (error_message != nullptr) {
+                *error_message = "准备读取自定义设备类型失败：" + sqlite_error(database_);
+            }
+            return StatusCode::kIoError;
+        }
+        int step_status = SQLITE_ROW;
+        while ((step_status = sqlite3_step(list_statement.get())) == SQLITE_ROW) {
+            const auto template_id = column_text(list_statement.get(), 0);
+            if (keep_template_ids.find(template_id) == keep_template_ids.end()) {
+                remove_ids.push_back(template_id);
+            }
+        }
+        if (step_status != SQLITE_DONE) {
+            if (error_message != nullptr) {
+                *error_message = "读取自定义设备类型失败：" + sqlite_error(database_);
+            }
+            return StatusCode::kIoError;
+        }
+    }
+
+    for (const auto& template_id : remove_ids) {
+        Statement fields_statement(
+            database_, "DELETE FROM device_template_fields WHERE template_id=?;");
+        Statement blocks_statement(
+            database_, "DELETE FROM device_template_read_blocks WHERE template_id=?;");
+        Statement template_statement(
+            database_, "DELETE FROM device_templates WHERE template_id=? AND builtin=0;");
+        if (!delete_template_preferences(database_, template_id) ||
+            !fields_statement.ok() || !bind_text(fields_statement.get(), 1, template_id) ||
+            sqlite3_step(fields_statement.get()) != SQLITE_DONE ||
+            !blocks_statement.ok() || !bind_text(blocks_statement.get(), 1, template_id) ||
+            sqlite3_step(blocks_statement.get()) != SQLITE_DONE ||
+            !template_statement.ok() || !bind_text(template_statement.get(), 1, template_id) ||
+            sqlite3_step(template_statement.get()) != SQLITE_DONE) {
+            if (error_message != nullptr) {
+                *error_message = "删除配置包外的自定义设备类型“" + template_id + "”失败：" +
+                                 sqlite_error(database_);
+            }
+            return StatusCode::kIoError;
+        }
+    }
+
+    return load_templates_locked(templates, error_message);
+}
+
 // 在持锁状态下加载模板。
 StatusCode DeviceTemplateStore::load_templates_locked(
     std::vector<DeviceTemplateDefinition>* templates,

@@ -22,6 +22,8 @@ struct sqlite3;
 
 namespace edge_controller {
 
+class ConfigImportTransaction;
+
 class ConfigStore {
 public:
     // 销毁 ConfigStore 实例并释放相关资源。
@@ -319,6 +321,8 @@ private:
     bool database_ready_locked(std::string* error_message) const;
     // 在持锁状态下关闭数据库。
     void close_database_locked();
+
+    friend class ConfigImportTransaction;
 
     // 单个 SQLite 连接由本锁串行使用；公开方法不得返回依赖 statement 或连接生命周期的引用。
     mutable std::mutex mutex_;

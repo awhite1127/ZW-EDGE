@@ -246,7 +246,11 @@ PollingService::MasterCollectionResult PollingService::execute_master_collection
     write_history_records(master_config, statuses_to_store);
     if (alarm_evaluator_ != nullptr) {
         // 告警判定使用已写入运行缓存的同一批设备状态，避免页面实时值与告警判断来源不一致。
-        for (const auto& device_status : statuses_to_store) alarm_evaluator_->evaluate(device_status);
+        std::string alarm_error;
+        const auto alarm_status = alarm_evaluator_->evaluate_batch(statuses_to_store, &alarm_error);
+        if (!is_ok(alarm_status)) {
+            Logger::error("告警评估批次提交失败：" + alarm_error);
+        }
     }
 
     if (!result.map_result.success) {
