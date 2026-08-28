@@ -26,81 +26,58 @@ func (s *ConsoleService) LoadHistoryOverview(ctx context.Context, query model.Hi
 	}
 
 	// 四个数据源互不依赖，并行读取可避免历史总览首屏串行等待多次 IPC。
-	var (
-		maintenance      model.DataMaintenanceSummary
-		snapshot         model.RealtimeViewSnapshot
-		configSummary    model.ConfigSummary
-		summaries        []model.HistoryOverviewSummary
-		maintenanceErr   error
-		snapshotErr      error
-		configSummaryErr error
-		summariesErr     error
-		wg               sync.WaitGroup
-	)
-	wg.Add(4)
-	go func() {
-		defer wg.Done()
-		maintenance, maintenanceErr = s.backend.GetDataMaintenanceSummary(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		snapshot, snapshotErr = s.backend.GetRealtimeViewSnapshot(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		configSummary, configSummaryErr = s.backend.GetConfigSummary(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		summaries, summariesErr = s.backend.GetHistoryOverviewSummaries(ctx)
-	}()
+	var wg sync.WaitGroup
+	maintenance := startLoad(ctx, &wg, s.backend.GetDataMaintenanceSummary)
+	snapshot := startLoad(ctx, &wg, s.backend.GetRealtimeViewSnapshot)
+	configSummary := startLoad(ctx, &wg, s.backend.GetConfigSummary)
+	summaries := startLoad(ctx, &wg, s.backend.GetHistoryOverviewSummaries)
 	wg.Wait()
 
-	if maintenanceErr == nil {
-		pageData.Maintenance = maintenance
+	if maintenance.err == nil {
+		pageData.Maintenance = maintenance.value
 		pageData.MaintenanceState.Available = true
 	} else {
-		pageData.MaintenanceState.ErrorMessage = maintenanceErr.Error()
+		pageData.MaintenanceState.ErrorMessage = maintenance.err.Error()
 	}
 
 	// 实时拓扑提供设备层级和当前状态，是历史总览的基础数据。
-	if snapshotErr != nil {
+	if snapshot.err != nil {
 		pageData.BackendReachable = false
-		pageData.ErrorMessage = "历史数据总览获取失败：" + snapshotErr.Error()
+		pageData.ErrorMessage = "历史数据总览获取失败：" + snapshot.err.Error()
 		return pageData
 	}
 
 	// 加载设备类型并建立拓扑索引，随后解析当前筛选条件。
-	if configSummaryErr != nil {
-		pageData.ErrorMessage = partialError("设备类型获取", configSummaryErr)
+	if configSummary.err != nil {
+		pageData.ErrorMessage = partialError("设备类型获取", configSummary.err)
 	}
-	deviceTemplates := normalizedDeviceTemplates(configSummary.DeviceTemplates)
-	pageData.HasDevices = len(snapshot.Devices) > 0 || len(snapshot.SystemStatus.DeviceStatusList) > 0
+	deviceTemplates := normalizedDeviceTemplates(configSummary.value.DeviceTemplates)
+	pageData.HasDevices = len(snapshot.value.Devices) > 0 || len(snapshot.value.SystemStatus.DeviceStatusList) > 0
 	if !pageData.HasDevices {
 		return pageData
 	}
 
-	statusByID := make(map[string]model.DeviceStatus, len(snapshot.SystemStatus.DeviceStatusList))
-	for _, status := range snapshot.SystemStatus.DeviceStatusList {
+	statusByID := make(map[string]model.DeviceStatus, len(snapshot.value.SystemStatus.DeviceStatusList))
+	for _, status := range snapshot.value.SystemStatus.DeviceStatusList {
 		statusByID[status.DeviceID] = status
 	}
-	realtimeByID := make(map[string]model.DeviceRealtimeSnapshot, len(snapshot.DeviceRealtimeSnapshots))
-	for _, item := range snapshot.DeviceRealtimeSnapshots {
+	realtimeByID := make(map[string]model.DeviceRealtimeSnapshot, len(snapshot.value.DeviceRealtimeSnapshots))
+	for _, item := range snapshot.value.DeviceRealtimeSnapshots {
 		if validRealtimeSnapshot(item) {
 			realtimeByID[item.DeviceID] = item
 		}
 	}
-	masterByID := make(map[string]model.MasterNodeConfig, len(snapshot.Masters))
-	for _, master := range snapshot.Masters {
+	masterByID := make(map[string]model.MasterNodeConfig, len(snapshot.value.Masters))
+	for _, master := range snapshot.value.Masters {
 		masterByID[master.MasterID] = master
 	}
-	channelByID := make(map[string]model.ChannelConfig, len(snapshot.Channels))
-	for _, channel := range snapshot.Channels {
+	channelByID := make(map[string]model.ChannelConfig, len(snapshot.value.Channels))
+	for _, channel := range snapshot.value.Channels {
 		channelByID[channel.ChannelID] = channel
 	}
-	filter, invalidFilterMessage := resolveHistoryOverviewFilter(query, snapshot, masterByID, channelByID, statusByID)
-	pageData.FilterTree = buildHistoryFilterTree(snapshot, filter)
-	pageData.DeviceOptions, pageData.CurrentDeviceID, pageData.CurrentDeviceName = buildHistoryOverviewDeviceOptions(snapshot, filter)
+	filter, invalidFilterMessage := resolveHistoryOverviewFilter(query, snapshot.value, masterByID, channelByID, statusByID)
+	pageData.FilterTree = buildHistoryFilterTree(snapshot.value, filter)
+	pageData.DeviceOptions, pageData.CurrentDeviceID, pageData.CurrentDeviceName = buildHistoryOverviewDeviceOptions(snapshot.value, filter)
 	pageData.ShowDeviceSelector = len(pageData.DeviceOptions) > 1
 	pageData.HasHistoryFilter = filter.Kind != ""
 	pageData.CurrentFilterText = historyFilterText(filter)
@@ -110,21 +87,21 @@ func (s *ConsoleService) LoadHistoryOverview(ctx context.Context, query model.Hi
 
 	// 批量摘要是当前正式协议的一部分，一次查询覆盖全部 device/point/period，
 	// 避免失败时退回 device × point × day/hour 的 N+1 IPC 与 SQLite 查询。
-	if summariesErr != nil {
-		pageData.ErrorMessage = partialError("历史摘要获取", summariesErr)
+	if summaries.err != nil {
+		pageData.ErrorMessage = partialError("历史摘要获取", summaries.err)
 		pageData.EmptyStateText = "历史数据摘要暂时无法获取"
 		pageData.EmptyStateDescription = "请稍后刷新；实时采集与设备配置不受影响。"
 		return pageData
 	}
 	pageData.Rows = buildHistoryOverviewRowsFromBatch(
-		snapshot,
+		snapshot.value,
 		filter,
 		statusByID,
 		realtimeByID,
 		masterByID,
 		channelByID,
 		deviceTemplates,
-		summaries,
+		summaries.value,
 	)
 	if pageData.HasHistoryFilter && len(pageData.Rows) == 0 {
 		pageData.EmptyStateText = "当前筛选条件下暂无历史数据项"

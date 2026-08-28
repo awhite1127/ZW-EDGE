@@ -66,16 +66,6 @@ func permissionSet(values ...string) map[string]bool {
 	return result
 }
 
-// permissionsForRole 返回新的权限集合，调用方可以安全读取而不会修改全局角色定义。
-func permissionsForRole(role string) map[string]bool {
-	source := rolePermissions[normalizeRole(role)]
-	result := make(map[string]bool, len(source))
-	for permission, allowed := range source {
-		result[permission] = allowed
-	}
-	return result
-}
-
 // hasPermission 判断是否具有权限。
 func hasPermission(role string, permission string) bool {
 	return rolePermissions[normalizeRole(role)][permission]

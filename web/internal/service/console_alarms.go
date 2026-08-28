@@ -268,14 +268,6 @@ func defaultAlarmRule(deviceID string, pointKey string) model.AlarmRule {
 	}
 }
 
-// alarmRuleStatusText 返回报警规则的启用状态说明。
-func alarmRuleStatusText(hasRule bool, rule model.AlarmRule) string {
-	if hasRule && rule.Enabled {
-		return "已启用"
-	}
-	return "未启用"
-}
-
 // alarmLevelText 返回报警级别的中文名称。
 func alarmLevelText(level string) string {
 	switch strings.ToLower(strings.TrimSpace(level)) {
@@ -513,17 +505,6 @@ func validateMasterAlarmRuleRequest(request model.MasterAlarmRuleRequest) string
 		TriggerCount:  request.TriggerCount,
 		RecoveryCount: request.RecoveryCount,
 	})
-}
-
-// validateAlarmRuleRequest 校验告警规则请求。
-func validateAlarmRuleRequest(rule model.AlarmRule) string {
-	if rule.DeviceID == "" {
-		return "请选择主站"
-	}
-	if rule.PointKey == "" {
-		return "请选择数据项"
-	}
-	return validateAlarmRuleParameters(rule)
 }
 
 // validateAlarmRuleParameters 校验告警规则参数。

@@ -10,10 +10,7 @@ import (
 
 // userVisibleAlarmLimitText 只规范化展示文案；后端字段、枚举和配置结构保持 high/low 原样。
 func userVisibleAlarmLimitText(text string) string {
-	return strings.NewReplacer(
-		"高限", "上限",
-		"低限", "下限",
-	).Replace(text)
+	return strings.ReplaceAll(strings.ReplaceAll(text, "高限", "上限"), "低限", "下限")
 }
 
 func normalizePositiveInt(value int, fallback int) int {

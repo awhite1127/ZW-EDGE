@@ -392,6 +392,16 @@ void BackendService::apply_prepared_runtime_config_locked(
 {
     // 到这里说明新配置已经完整准备成功，可以用一次性切换替换旧运行态。
     channel_manager_.close_all();
+    std::unordered_set<ChannelId> retained_channel_ids;
+    retained_channel_ids.reserve(prepared.system_config.channels.size());
+    for (const auto& channel : prepared.system_config.channels) {
+        retained_channel_ids.insert(channel.channel_id);
+    }
+    for (const auto& channel : system_config_.channels) {
+        if (retained_channel_ids.find(channel.channel_id) == retained_channel_ids.end()) {
+            communication_trace_store_.clear_channel(channel.channel_id);
+        }
+    }
     system_config_ = std::move(prepared.system_config);
     if (!applied_time_settings_initialized_) {
         // initialize 只加载持久化配置；启动恢复之前，已应用配置按当前干净板实际状态建立。

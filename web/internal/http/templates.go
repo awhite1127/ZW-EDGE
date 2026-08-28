@@ -634,10 +634,7 @@ func eventSummaryDetailText(event model.ServiceEvent) string {
 
 // userVisibleAlarmLimitText 清理报警文本中仅供内部使用的限制说明。
 func userVisibleAlarmLimitText(text string) string {
-	return strings.NewReplacer(
-		"高限", "上限",
-		"低限", "下限",
-	).Replace(text)
+	return strings.ReplaceAll(strings.ReplaceAll(text, "高限", "上限"), "低限", "下限")
 }
 
 // eventRepeatText 格式化事件重复次数。

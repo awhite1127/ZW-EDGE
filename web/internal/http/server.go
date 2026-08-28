@@ -18,7 +18,6 @@ type Server struct {
 	httpServer                   *http.Server
 	templates                    map[string]*template.Template
 	console                      *service.ConsoleService
-	socketPath                   string
 	loginAttempts                *loginAttemptStore
 	verifyWebLogin               func(context.Context, model.WebLoginRequest) (model.WebLoginResult, error)
 	changeWebPassword            func(context.Context, model.WebPasswordChangeRequest) model.ActionFeedback
@@ -55,7 +54,7 @@ const (
 )
 
 // NewServer 创建并初始化服务。
-func NewServer(addr string, templateDir string, staticDir string, socketPath string, backend *service.BackendService) (*Server, error) {
+func NewServer(addr string, templateDir string, staticDir string, backend *service.BackendService) (*Server, error) {
 	consoleService := service.NewConsoleService(backend)
 	templates, err := loadPageTemplates(templateDir)
 	if err != nil {
@@ -65,7 +64,6 @@ func NewServer(addr string, templateDir string, staticDir string, socketPath str
 	server := &Server{
 		templates:                    templates,
 		console:                      consoleService,
-		socketPath:                   socketPath,
 		loginAttempts:                newLoginAttemptStore(),
 		verifyWebLogin:               consoleService.VerifyWebLogin,
 		changeWebPassword:            consoleService.ChangeWebPassword,

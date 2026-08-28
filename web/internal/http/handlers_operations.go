@@ -23,7 +23,7 @@ func (s *Server) handleOperationsPage(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer wait.Done()
 		// 升级模块按需初始化，首屏不再读取版本和完整状态。
-		pageData = s.console.LoadOperations(ctx, rolePermissionViews(), false)
+		pageData = s.console.LoadOperations(ctx, rolePermissionViews())
 	}()
 	go func() {
 		defer wait.Done()
@@ -50,7 +50,7 @@ func (s *Server) handleOperationsUsersPage(w http.ResponseWriter, r *http.Reques
 	ctx, cancel := s.console.WithTimeout(r.Context())
 	defer cancel()
 
-	pageData := s.console.LoadOperations(ctx, rolePermissionViews(), false)
+	pageData := s.console.LoadOperations(ctx, rolePermissionViews())
 	pageData.BasePageData = mergeBasePageData(
 		s.basePageData(
 			"用户与权限",

@@ -39,21 +39,10 @@ func (s *ConsoleService) LoadEvents(ctx context.Context, query model.EventsPageQ
 		// 历史标签不读取活动告警、主站、模板和规则，避免一次页面查看触发无关 IPC。
 		result.ActiveAlarmsState.Available = true
 		result.AlarmRulesState.Available = true
-		var (
-			devices      []model.DeviceConfig
-			eventHistory model.EventHistoryResult
-			devicesErr   error
-			eventsErr    error
-			wg           sync.WaitGroup
-		)
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			devices, devicesErr = s.backend.ListDevices(ctx)
-		}()
-		go func() {
-			defer wg.Done()
-			eventHistory, eventsErr = s.backend.QueryServiceEvents(ctx, model.EventHistoryQuery{
+		var wg sync.WaitGroup
+		devices := startLoad(ctx, &wg, s.backend.ListDevices)
+		eventHistory := startLoad(ctx, &wg, func(ctx context.Context) (model.EventHistoryResult, error) {
+			return s.backend.QueryServiceEvents(ctx, model.EventHistoryQuery{
 				Level:     result.LevelFilter,
 				Source:    result.SourceFilter,
 				Search:    result.SearchQuery,
@@ -61,53 +50,33 @@ func (s *ConsoleService) LoadEvents(ctx context.Context, query model.EventsPageQ
 				Page:      result.Page,
 				PageSize:  result.PageSize,
 			})
-		}()
+		})
 		wg.Wait()
-		applyEventsHistoryData(&result, eventHistory, eventsErr, devices, devicesErr)
+		applyEventsHistoryData(&result, eventHistory.value, eventHistory.err, devices.value, devices.err)
 		result.BasePageData.BackendReachable = result.EventsState.Available
 		return result
 	}
 
 	// 告警管理页不读取历史事件；其余相互独立的数据源并行获取。
 	result.EventsState.Available = true
-	var (
-		alarms     []model.ActiveAlarm
-		devices    []model.DeviceConfig
-		masters    []model.MasterNodeConfig
-		summary    model.ConfigSummary
-		rules      []model.AlarmRule
-		alarmsErr  error
-		devicesErr error
-		mastersErr error
-		summaryErr error
-		rulesErr   error
-		wg         sync.WaitGroup
-	)
-	wg.Add(5)
-	go func() {
-		defer wg.Done()
-		alarms, alarmsErr = s.backend.ListActiveAlarms(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		devices, devicesErr = s.backend.ListDevices(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		masters, mastersErr = s.backend.ListMasters(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		summary, summaryErr = s.backend.GetConfigSummary(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		rules, rulesErr = s.backend.ListAlarmRules(ctx, "")
-	}()
+	var wg sync.WaitGroup
+	alarms := startLoad(ctx, &wg, s.backend.ListActiveAlarms)
+	devices := startLoad(ctx, &wg, s.backend.ListDevices)
+	masters := startLoad(ctx, &wg, s.backend.ListMasters)
+	summary := startLoad(ctx, &wg, s.backend.GetConfigSummary)
+	rules := startLoad(ctx, &wg, func(ctx context.Context) ([]model.AlarmRule, error) {
+		return s.backend.ListAlarmRules(ctx, "")
+	})
 	wg.Wait()
 
-	applyActiveAlarmData(&result, alarms, alarmsErr)
-	applyAlarmRuleData(&result, devices, devicesErr, masters, mastersErr, summary, summaryErr, rules, rulesErr)
+	applyActiveAlarmData(&result, alarms.value, alarms.err)
+	applyAlarmRuleData(
+		&result,
+		devices.value, devices.err,
+		masters.value, masters.err,
+		summary.value, summary.err,
+		rules.value, rules.err,
+	)
 	result.BasePageData.BackendReachable = result.ActiveAlarmsState.Available || result.AlarmRulesState.Available
 	return result
 }

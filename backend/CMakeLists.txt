@@ -217,6 +217,21 @@ target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_17)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE edge_controller_core Threads::Threads)
 
+# Release 产物按函数和数据分段，最终链接时移除静态核心库中未被产品入口使用的内容。
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(edge_controller_core PRIVATE
+        "$<$<CONFIG:Release>:-ffunction-sections>"
+        "$<$<CONFIG:Release>:-fdata-sections>"
+    )
+    target_compile_options(${PROJECT_NAME} PRIVATE
+        "$<$<CONFIG:Release>:-ffunction-sections>"
+        "$<$<CONFIG:Release>:-fdata-sections>"
+    )
+    target_link_options(${PROJECT_NAME} PRIVATE
+        "$<$<CONFIG:Release>:-Wl,--gc-sections>"
+    )
+endif()
+
 option(EDGE_CONTROLLER_BUILD_TESTS "Build edge-controller backend tests" OFF)
 if(EDGE_CONTROLLER_BUILD_TESTS)
     enable_testing()

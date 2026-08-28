@@ -345,15 +345,6 @@ func (s *Server) handleEventsPage(w http.ResponseWriter, r *http.Request) {
 		// XHR 响应只解析告警片段，布局中的系统名称不会进入当前页面 DOM。
 		s.applySystemDisplayNameFromBackend(ctx, &pageData.BasePageData)
 	}
-	if pageData.EventsState.ErrorMessage != "" {
-		pageData.EventsState.ErrorMessage = userVisibleErrorMessage(pageData.EventsState.ErrorMessage)
-	}
-	if pageData.ActiveAlarmsState.ErrorMessage != "" {
-		pageData.ActiveAlarmsState.ErrorMessage = userVisibleErrorMessage(pageData.ActiveAlarmsState.ErrorMessage)
-	}
-	if pageData.AlarmRulesState.ErrorMessage != "" {
-		pageData.AlarmRulesState.ErrorMessage = userVisibleErrorMessage(pageData.AlarmRulesState.ErrorMessage)
-	}
 	s.renderPage(w, "events", pageData)
 }
 
@@ -375,7 +366,7 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := s.console.WithTimeout(r.Context())
 	defer cancel()
 
-	pageData := s.console.LoadSettings(ctx, parseTemplatePageQuery(r))
+	pageData := s.console.LoadSettings(ctx)
 	pageData.BasePageData = mergeBasePageData(
 		s.basePageData(
 			"系统设置",
@@ -385,7 +376,6 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		),
 		pageData.BasePageData,
 	)
-	pageData.SettingsReturnPath = "/settings"
 	applySystemDisplayName(&pageData.BasePageData, pageData.Settings)
 	s.renderPage(w, "settings", pageData)
 }

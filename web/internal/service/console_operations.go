@@ -12,70 +12,31 @@ import (
 func (s *ConsoleService) LoadOperations(
 	ctx context.Context,
 	roles []model.RolePermissionView,
-	includeApplicationUpdate bool,
 ) model.OperationsPageData {
-	var (
-		users          []model.WebUser
-		usersErr       error
-		maintenance    model.DataMaintenanceSummary
-		maintenanceErr error
-		version        model.UpdateVersion
-		versionErr     error
-		status         model.UpdateStatus
-		statusErr      error
-		wait           sync.WaitGroup
-	)
-	wait.Add(2)
-	go func() {
-		defer wait.Done()
-		users, usersErr = s.ListWebUsers(ctx)
-	}()
-	go func() {
-		defer wait.Done()
-		maintenance, maintenanceErr = s.GetDataMaintenanceSummary(ctx)
-	}()
-	if includeApplicationUpdate {
-		wait.Add(2)
-		go func() {
-			defer wait.Done()
-			version, versionErr = s.GetUpdateCurrentVersion(ctx)
-		}()
-		go func() {
-			defer wait.Done()
-			status, statusErr = s.GetUpdateStatus(ctx)
-		}()
-	}
+	var wait sync.WaitGroup
+	users := startLoad(ctx, &wait, s.ListWebUsers)
+	maintenance := startLoad(ctx, &wait, s.GetDataMaintenanceSummary)
 	wait.Wait()
 
 	pageData := model.OperationsPageData{
 		BasePageData:     model.BasePageData{BackendReachable: true},
-		Users:            users,
-		UserCount:        len(users),
-		EnabledUserCount: enabledWebUserCount(users),
+		Users:            users.value,
+		UserCount:        len(users.value),
+		EnabledUserCount: enabledWebUserCount(users.value),
 		UsersState:       model.SectionState{Available: true},
-		Maintenance:      maintenance,
+		Maintenance:      maintenance.value,
 		MaintenanceState: model.SectionState{Available: true},
 		Roles:            roles,
 	}
-	if usersErr != nil {
-		pageData.UsersState = model.SectionState{ErrorMessage: usersErr.Error()}
+	if users.err != nil {
+		pageData.UsersState = model.SectionState{ErrorMessage: users.err.Error()}
 	}
-	if maintenanceErr != nil {
-		pageData.MaintenanceState = model.SectionState{ErrorMessage: maintenanceErr.Error()}
+	if maintenance.err != nil {
+		pageData.MaintenanceState = model.SectionState{ErrorMessage: maintenance.err.Error()}
 	}
-	if usersErr != nil && maintenanceErr != nil {
+	if users.err != nil && maintenance.err != nil {
 		pageData.BackendReachable = false
 		pageData.ErrorMessage = "后端不可达，运维管理暂时无法获取"
-	}
-	if includeApplicationUpdate {
-		pageData.UpdateVersion = version
-		pageData.UpdateStatus = status
-		pageData.UpdateState = model.SectionState{Available: versionErr == nil && statusErr == nil}
-		if versionErr != nil {
-			pageData.UpdateState.ErrorMessage = versionErr.Error()
-		} else if statusErr != nil {
-			pageData.UpdateState.ErrorMessage = statusErr.Error()
-		}
 	}
 	return pageData
 }

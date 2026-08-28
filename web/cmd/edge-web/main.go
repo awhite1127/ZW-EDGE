@@ -49,7 +49,7 @@ func run() error {
 	ipcClient := ipc.NewClient(socketPath, ipcTimeout)
 	backendService := service.NewBackendServiceWithTimeout(ipcClient, ipcTimeout)
 
-	server, err := httpserver.NewServer(listenAddr, templateDir, staticDir, socketPath, backendService)
+	server, err := httpserver.NewServer(listenAddr, templateDir, staticDir, backendService)
 	if err != nil {
 		return fmt.Errorf("初始化 Web 服务失败：%w", err)
 	}

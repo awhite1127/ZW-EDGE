@@ -388,7 +388,7 @@ main()
     fi
 
     log "配置 Release 构建：build=${BUILD_DIR}；jobs=${BUILD_JOBS}；toolchain=${TOOLCHAIN_FILE}"
-    log "IPO/LTO=${ipo_enabled}；Release flags=-O2 -DNDEBUG；RPATH/RUNPATH=${RUNTIME_RPATH}"
+    log "IPO/LTO=${ipo_enabled}；Release flags=-O2 -DNDEBUG + section GC；RPATH/RUNPATH=${RUNTIME_RPATH}"
     cmake \
         -S "${PROJECT_ROOT}/backend" \
         -B "${BUILD_DIR}" \

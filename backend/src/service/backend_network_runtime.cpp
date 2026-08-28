@@ -16,7 +16,6 @@
 #include <sstream>
 #include <string>
 #include <thread>
-#include <unordered_map>
 #include <vector>
 
 #include "common/filesystem_compat.h"
@@ -388,23 +387,24 @@ bool dhcp_client_running(const std::string& interface_name)
 bool dhcp_client_running_for_status(const std::string& interface_name)
 {
     struct Entry {
+        std::string interface_name;
         bool running{false};
         std::chrono::steady_clock::time_point checked_at{};
     };
     static std::mutex cache_mutex;
-    static std::unordered_map<std::string, Entry> cache;
+    static Entry cache;
     const auto now = std::chrono::steady_clock::now();
     {
         std::lock_guard<std::mutex> lock(cache_mutex);
-        const auto found = cache.find(interface_name);
-        if (found != cache.end() && now - found->second.checked_at < std::chrono::seconds(15)) {
-            return found->second.running;
+        if (cache.interface_name == interface_name &&
+            now - cache.checked_at < std::chrono::seconds(15)) {
+            return cache.running;
         }
     }
     const bool running = dhcp_client_running(interface_name);
     {
         std::lock_guard<std::mutex> lock(cache_mutex);
-        cache[interface_name] = Entry{running, now};
+        cache = Entry{interface_name, running, now};
     }
     return running;
 }

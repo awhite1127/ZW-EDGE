@@ -114,85 +114,45 @@ type CollectionLoadResult struct {
 // LoadCollection 对采集管理首屏所需的共享数据只读取一次，
 // 避免组合三个独立 API 加载器时重复请求通道、主站、系统状态和设备类型。
 func (s *ConsoleService) LoadCollection(ctx context.Context) CollectionLoadResult {
-	var (
-		channels      []model.ChannelConfig
-		masters       []model.MasterNodeConfig
-		devices       []model.DeviceConfig
-		systemStatus  model.SystemStatus
-		serialPorts   []model.SerialPortInfo
-		configSummary model.ConfigSummary
-		channelErr    error
-		masterErr     error
-		deviceErr     error
-		statusErr     error
-		serialErr     error
-		summaryErr    error
-		wg            sync.WaitGroup
-	)
-	wg.Add(6)
-	go func() {
-		defer wg.Done()
-		channels, channelErr = s.backend.ListChannels(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		masters, masterErr = s.backend.ListMasters(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		devices, deviceErr = s.backend.ListDevices(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		systemStatus, statusErr = s.backend.GetSystemStatus(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		serialPorts, serialErr = s.backend.ListSerialPorts(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		configSummary, summaryErr = s.backend.GetConfigSummary(ctx)
-	}()
+	var wg sync.WaitGroup
+	channels := startLoad(ctx, &wg, s.backend.ListChannels)
+	masters := startLoad(ctx, &wg, s.backend.ListMasters)
+	devices := startLoad(ctx, &wg, s.backend.ListDevices)
+	systemStatus := startLoad(ctx, &wg, s.backend.GetSystemStatus)
+	serialPorts := startLoad(ctx, &wg, s.backend.ListSerialPorts)
+	configSummary := startLoad(ctx, &wg, s.backend.GetConfigSummary)
 	wg.Wait()
 
 	return CollectionLoadResult{
-		Channels:       buildChannelsLoadResult(channels, systemStatus, serialPorts, channelErr, statusErr, serialErr),
-		Masters:        buildMastersLoadResult(masters, channels, systemStatus, configSummary, masterErr, channelErr, statusErr, summaryErr),
-		Devices:        buildDevicesLoadResult(devices, masters, channels, systemStatus, configSummary, deviceErr, masterErr, channelErr, statusErr, summaryErr),
-		PollingKnown:   statusErr == nil,
-		PollingRunning: statusErr == nil && systemStatus.PollingRunning,
-		PollingState:   systemStatus.PollingState,
+		Channels: buildChannelsLoadResult(
+			channels.value, systemStatus.value, serialPorts.value,
+			channels.err, systemStatus.err, serialPorts.err,
+		),
+		Masters: buildMastersLoadResult(
+			masters.value, channels.value, systemStatus.value, configSummary.value,
+			masters.err, channels.err, systemStatus.err, configSummary.err,
+		),
+		Devices: buildDevicesLoadResult(
+			devices.value, masters.value, channels.value, systemStatus.value, configSummary.value,
+			devices.err, masters.err, channels.err, systemStatus.err, configSummary.err,
+		),
+		PollingKnown:   systemStatus.err == nil,
+		PollingRunning: systemStatus.err == nil && systemStatus.value.PollingRunning,
+		PollingState:   systemStatus.value.PollingState,
 	}
 }
 
 func (s *ConsoleService) LoadChannels(ctx context.Context) model.ChannelsLoadResult {
-	var (
-		channels     []model.ChannelConfig
-		systemStatus model.SystemStatus
-		serialPorts  []model.SerialPortInfo
-		configErr    error
-		statusErr    error
-		serialErr    error
-		wg           sync.WaitGroup
-	)
-
-	wg.Add(3)
-	go func() {
-		defer wg.Done()
-		channels, configErr = s.backend.ListChannels(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		systemStatus, statusErr = s.backend.GetSystemStatus(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		serialPorts, serialErr = s.backend.ListSerialPorts(ctx)
-	}()
+	var wg sync.WaitGroup
+	channels := startLoad(ctx, &wg, s.backend.ListChannels)
+	systemStatus := startLoad(ctx, &wg, s.backend.GetSystemStatus)
+	serialPorts := startLoad(ctx, &wg, s.backend.ListSerialPorts)
 	wg.Wait()
 
-	return buildChannelsLoadResult(channels, systemStatus, serialPorts, configErr, statusErr, serialErr)
+	return buildChannelsLoadResult(
+		channels.value, systemStatus.value, serialPorts.value,
+		channels.err, systemStatus.err, serialPorts.err,
+	)
 }
 
 // buildChannelsLoadResult 使用已取得的共享快照构造通道区块。
@@ -259,38 +219,17 @@ func buildChannelsLoadResult(
 }
 
 func (s *ConsoleService) LoadMasters(ctx context.Context) model.MastersLoadResult {
-	var (
-		masters       []model.MasterNodeConfig
-		channels      []model.ChannelConfig
-		systemStatus  model.SystemStatus
-		configSummary model.ConfigSummary
-		configErr     error
-		channelErr    error
-		statusErr     error
-		summaryErr    error
-		wg            sync.WaitGroup
-	)
-
-	wg.Add(4)
-	go func() {
-		defer wg.Done()
-		masters, configErr = s.backend.ListMasters(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		channels, channelErr = s.backend.ListChannels(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		systemStatus, statusErr = s.backend.GetSystemStatus(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		configSummary, summaryErr = s.backend.GetConfigSummary(ctx)
-	}()
+	var wg sync.WaitGroup
+	masters := startLoad(ctx, &wg, s.backend.ListMasters)
+	channels := startLoad(ctx, &wg, s.backend.ListChannels)
+	systemStatus := startLoad(ctx, &wg, s.backend.GetSystemStatus)
+	configSummary := startLoad(ctx, &wg, s.backend.GetConfigSummary)
 	wg.Wait()
 
-	return buildMastersLoadResult(masters, channels, systemStatus, configSummary, configErr, channelErr, statusErr, summaryErr)
+	return buildMastersLoadResult(
+		masters.value, channels.value, systemStatus.value, configSummary.value,
+		masters.err, channels.err, systemStatus.err, configSummary.err,
+	)
 }
 
 // buildMastersLoadResult 使用已取得的共享快照构造主站区块。
@@ -424,44 +363,18 @@ func buildMasterChannelOptions(
 
 func (s *ConsoleService) LoadDevices(ctx context.Context) model.DevicesLoadResult {
 	// 并行读取设备配置及其关联的主站、通道、状态和设备类型。
-	var (
-		devices       []model.DeviceConfig
-		masters       []model.MasterNodeConfig
-		channels      []model.ChannelConfig
-		systemStatus  model.SystemStatus
-		configSummary model.ConfigSummary
-		configErr     error
-		masterErr     error
-		channelErr    error
-		statusErr     error
-		summaryErr    error
-		wg            sync.WaitGroup
-	)
-
-	wg.Add(5)
-	go func() {
-		defer wg.Done()
-		devices, configErr = s.backend.ListDevices(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		masters, masterErr = s.backend.ListMasters(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		channels, channelErr = s.backend.ListChannels(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		systemStatus, statusErr = s.backend.GetSystemStatus(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		configSummary, summaryErr = s.backend.GetConfigSummary(ctx)
-	}()
+	var wg sync.WaitGroup
+	devices := startLoad(ctx, &wg, s.backend.ListDevices)
+	masters := startLoad(ctx, &wg, s.backend.ListMasters)
+	channels := startLoad(ctx, &wg, s.backend.ListChannels)
+	systemStatus := startLoad(ctx, &wg, s.backend.GetSystemStatus)
+	configSummary := startLoad(ctx, &wg, s.backend.GetConfigSummary)
 	wg.Wait()
 
-	return buildDevicesLoadResult(devices, masters, channels, systemStatus, configSummary, configErr, masterErr, channelErr, statusErr, summaryErr)
+	return buildDevicesLoadResult(
+		devices.value, masters.value, channels.value, systemStatus.value, configSummary.value,
+		devices.err, masters.err, channels.err, systemStatus.err, configSummary.err,
+	)
 }
 
 // buildDevicesLoadResult 使用已取得的共享快照构建设备区块。

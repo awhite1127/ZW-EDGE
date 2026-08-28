@@ -8,6 +8,37 @@ import (
 	"edge-web/internal/model"
 )
 
+var internalParameterPathReplacer = strings.NewReplacer(
+	"modbus_server_settings.", "",
+	"modbus_register_mapping.", "",
+	"listen_address", "监听地址",
+	"listen_port", "监听端口",
+	"unit_id", "Unit ID",
+	"max_clients", "最大客户端数",
+	"idle_timeout_seconds", "客户端空闲超时",
+	"max_read_registers", "单次最大读取寄存器数",
+	"mapping_id", "映射 ID",
+	"device_id", "设备",
+	"point_key", "数据项",
+	"device_name_snapshot", "设备名称快照",
+	"point_name_snapshot", "数据项名称快照",
+	"value_multiplier", "倍率",
+	"value_offset", "偏移",
+	"data_type", "数据类型",
+	"byte_order", "字节序",
+	"word_order", "字序",
+	"start_address", "数据寄存器地址",
+	"quality_address", "质量寄存器地址",
+	"params.realtime_grouping_enabled", "实时展示分组开关",
+	"params.realtime_groups", "实时展示分组",
+	"params.read_blocks", "读取区块",
+	"params.write_commands", "写入命令",
+	"params.fields", "数据项",
+	"fields.realtime_group_id", "数据项的实时展示分组",
+	"realtime_groups.id", "实时展示分组 ID",
+	"realtime_groups.name", "实时展示分组名称",
+)
+
 // channelErrorText 将通道底层错误转换为可展示的中文说明。
 func channelErrorText(message string) string {
 	return userVisibleErrorSummaryText(message)
@@ -221,17 +252,7 @@ func normalizeUserVisibleMessage(message string, fallback string) string {
 // IPC 参数路径是开发定位信息，不应直接出现在页面提示中。
 // 已知设备类型字段保留业务含义；未知 params 路径则降级为统一中文说明。
 func localizeInternalParameterPaths(message string) string {
-	replacer := strings.NewReplacer(
-		"params.realtime_grouping_enabled", "实时展示分组开关",
-		"params.realtime_groups", "实时展示分组",
-		"params.read_blocks", "读取区块",
-		"params.write_commands", "写入命令",
-		"params.fields", "数据项",
-		"fields.realtime_group_id", "数据项的实时展示分组",
-		"realtime_groups.id", "实时展示分组 ID",
-		"realtime_groups.name", "实时展示分组名称",
-	)
-	localized := replacer.Replace(message)
+	localized := internalParameterPathReplacer.Replace(message)
 	if strings.Contains(strings.ToLower(localized), "params.") {
 		return "提交的设备类型配置参数格式不正确"
 	}
@@ -310,20 +331,10 @@ func translateKnownUserMessage(message string) (string, bool) {
 	if strings.Contains(raw, "设备模板") {
 		return strings.ReplaceAll(raw, "设备模板", "设备类型"), true
 	}
-	if containsChinese(raw) && !containsASCIIWord(raw) {
-		return raw, true
-	}
-
 	lower := strings.ToLower(raw)
 	switch {
 	case strings.Contains(lower, "device not found:"):
 		return "设备不存在：" + strings.TrimSpace(raw[strings.LastIndex(raw, ":")+1:]), true
-	case strings.Contains(raw, "请选择设备模板"):
-		return "请选择设备类型", true
-	case strings.Contains(raw, "设备模板不存在"):
-		return "设备类型不存在", true
-	case strings.Contains(raw, "所属主控未配置设备模板"):
-		return "所属主站未配置设备类型", true
 	case strings.Contains(raw, "设备由主控配置自动生成"):
 		return "设备由主站配置的设备数量、起始地址和设备类型读取区块自动生成，请在主站配置中调整。", true
 	case strings.Contains(raw, "当前采集链路仅接受 Modbus RTU 或 Modbus TCP 主控"):
@@ -340,10 +351,8 @@ func translateKnownUserMessage(message string) (string, bool) {
 		return "当前主站配置包含已停用的连续采集数量规则，请重新打开主站配置并直接填写设备数量。", true
 	case strings.Contains(raw, "主控寄存器数量必须大于 0"):
 		return "当前主站配置缺少有效设备数量，请重新打开主站配置并填写大于 0 的设备数量。", true
-	case strings.Contains(raw, "单次读取寄存器数量超出范围"):
+	case strings.Contains(raw, "单次读取寄存器数量超出范围"), strings.Contains(raw, "单次读取保持寄存器数量超出范围"):
 		return "单次读取寄存器数量不能超过 125。", true
-	case strings.Contains(raw, "单次读取保持寄存器数量超出范围"):
-		return "单次读取保持寄存器数量不能超过 125。", true
 	case strings.Contains(raw, "该设备寄存器范围与同主控下已有设备重叠"):
 		return "该设备寄存器范围与同主站下已有设备重叠，请调整块内偏移。", true
 	case strings.Contains(lower, "channel is still referenced by master:"):
@@ -453,12 +462,21 @@ func translateKnownUserMessage(message string) (string, bool) {
 	case strings.Contains(lower, "unknown error"), lower == "error", lower == "failed":
 		return fallbackForEnglishDetail(lower, "操作失败"), true
 	}
+	if containsChinese(raw) {
+		return raw, true
+	}
 
 	return "", false
 }
 
 // API 成功响应中也可能携带后端诊断文本，因此在写 JSON 前递归本地化已知页面模型。
 // 未知类型原样返回，避免反射式修改业务数据。
+func localizeSectionStates(states ...*model.SectionState) {
+	for _, state := range states {
+		state.ErrorMessage = optionalUserVisibleErrorMessage(state.ErrorMessage)
+	}
+}
+
 func localizeUserFacingData(data interface{}) interface{} {
 	switch value := data.(type) {
 	// 基础页面及各一级页面模型。
@@ -476,10 +494,7 @@ func localizeUserFacingData(data interface{}) interface{} {
 	case model.OverviewPageData:
 		value.BasePageData = localizeUserFacingData(value.BasePageData).(model.BasePageData)
 		value.SystemStatus = localizeUserFacingData(value.SystemStatus).(model.SystemStatus)
-		value.SettingsState.ErrorMessage = optionalUserVisibleErrorMessage(value.SettingsState.ErrorMessage)
-		value.SystemStatusState.ErrorMessage = optionalUserVisibleErrorMessage(value.SystemStatusState.ErrorMessage)
-		value.ConfigState.ErrorMessage = optionalUserVisibleErrorMessage(value.ConfigState.ErrorMessage)
-		value.RecentErrorState.ErrorMessage = optionalUserVisibleErrorMessage(value.RecentErrorState.ErrorMessage)
+		localizeSectionStates(&value.SettingsState, &value.SystemStatusState, &value.ConfigState, &value.RecentErrorState, &value.EventsState, &value.ActiveAlarmsState)
 		value.RecentError = localizeUserFacingData(value.RecentError).(model.ServiceErrorSummary)
 		if value.RuntimeSnapshotAvailable {
 			value.RuntimeSnapshot = localizeUserFacingData(value.RuntimeSnapshot).(model.SystemOverviewSnapshot)
@@ -487,7 +502,6 @@ func localizeUserFacingData(data interface{}) interface{} {
 		value.DiagnosisCard.TypeText = optionalUserVisibleErrorText(value.DiagnosisCard.TypeText)
 		value.DiagnosisCard.Suggestion = optionalUserVisibleErrorText(value.DiagnosisCard.Suggestion)
 		value.DiagnosisCard.Note = optionalUserVisibleErrorText(value.DiagnosisCard.Note)
-		value.EventsState.ErrorMessage = optionalUserVisibleErrorMessage(value.EventsState.ErrorMessage)
 		for index := range value.RecentEvents {
 			value.RecentEvents[index].Summary = optionalUserVisibleErrorText(value.RecentEvents[index].Summary)
 			value.RecentEvents[index].Detail = optionalUserVisibleErrorText(value.RecentEvents[index].Detail)
@@ -507,38 +521,57 @@ func localizeUserFacingData(data interface{}) interface{} {
 		value.SystemStatus = localizeUserFacingData(value.SystemStatus).(model.SystemStatus)
 		value.Polling = localizeUserFacingData(value.Polling).(model.PollingCycleSummary)
 		value.CurrentError = localizeUserFacingData(value.CurrentError).(model.ServiceErrorSummary)
-		value.MqttRuntime.LastErrorMessage = optionalUserVisibleErrorMessage(value.MqttRuntime.LastErrorMessage)
-		value.MqttRuntime.LastPublishErrorMessage = optionalUserVisibleErrorMessage(value.MqttRuntime.LastPublishErrorMessage)
+		value.MqttRuntime = localizeUserFacingData(value.MqttRuntime).(model.MqttRuntimeStatus)
+		value.ModbusServerRuntime = localizeUserFacingData(value.ModbusServerRuntime).(model.ModbusServerRuntimeStatus)
 		return value
 	case model.EventsPageData:
 		value.BasePageData = localizeUserFacingData(value.BasePageData).(model.BasePageData)
-		value.EventsState.ErrorMessage = optionalUserVisibleErrorMessage(value.EventsState.ErrorMessage)
+		localizeSectionStates(&value.EventsState, &value.ActiveAlarmsState, &value.AlarmRulesState)
 		return value
 	case model.SettingsPageData:
 		value.BasePageData = localizeUserFacingData(value.BasePageData).(model.BasePageData)
-		value.SettingsState.ErrorMessage = optionalUserVisibleErrorMessage(value.SettingsState.ErrorMessage)
-		value.NetworkState.ErrorMessage = optionalUserVisibleErrorMessage(value.NetworkState.ErrorMessage)
-		value.NetworkRuntimeState.ErrorMessage = optionalUserVisibleErrorMessage(value.NetworkRuntimeState.ErrorMessage)
-		value.MqttState.ErrorMessage = optionalUserVisibleErrorMessage(value.MqttState.ErrorMessage)
-		value.MqttRuntimeState.ErrorMessage = optionalUserVisibleErrorMessage(value.MqttRuntimeState.ErrorMessage)
-		value.NetworkRuntime.Message = optionalUserVisibleErrorMessage(value.NetworkRuntime.Message)
-		value.MqttRuntime.LastErrorMessage = optionalUserVisibleErrorMessage(value.MqttRuntime.LastErrorMessage)
+		localizeSectionStates(&value.SettingsState, &value.TimeSettingsState, &value.TimeRuntimeState, &value.NetworkState, &value.NetworkRuntimeState, &value.MqttState, &value.MqttRuntimeState, &value.DeviceTemplateState)
+		value.TimeRuntime = localizeUserFacingData(value.TimeRuntime).(model.TimeRuntimeStatus)
+		value.NetworkRuntime = localizeUserFacingData(value.NetworkRuntime).(model.NetworkRuntimeStatus)
+		value.MqttRuntime = localizeUserFacingData(value.MqttRuntime).(model.MqttRuntimeStatus)
+		return value
+	case model.ModbusServerPageData:
+		value.BasePageData = localizeUserFacingData(value.BasePageData).(model.BasePageData)
+		value.Snapshot = localizeUserFacingData(value.Snapshot).(model.ModbusServerPageSnapshot)
+		localizeSectionStates(&value.SnapshotState, &value.PointsState)
 		return value
 	case model.OperationsPageData:
 		value.BasePageData = localizeUserFacingData(value.BasePageData).(model.BasePageData)
-		value.UsersState.ErrorMessage = optionalUserVisibleErrorMessage(value.UsersState.ErrorMessage)
-		value.MaintenanceState.ErrorMessage = optionalUserVisibleErrorMessage(value.MaintenanceState.ErrorMessage)
+		localizeSectionStates(&value.UsersState, &value.MaintenanceState)
 		return value
 	case model.SettingsRuntimeStatusResponse:
 		value.NetworkRuntimeError = optionalUserVisibleErrorMessage(value.NetworkRuntimeError)
 		value.MqttRuntimeError = optionalUserVisibleErrorMessage(value.MqttRuntimeError)
-		value.NetworkRuntime.Message = optionalUserVisibleErrorMessage(value.NetworkRuntime.Message)
-		value.MqttRuntime.LastErrorMessage = optionalUserVisibleErrorMessage(value.MqttRuntime.LastErrorMessage)
+		value.TimeRuntimeError = optionalUserVisibleErrorMessage(value.TimeRuntimeError)
+		value.TimeRuntime = localizeUserFacingData(value.TimeRuntime).(model.TimeRuntimeStatus)
+		value.NetworkRuntime = localizeUserFacingData(value.NetworkRuntime).(model.NetworkRuntimeStatus)
+		value.MqttRuntime = localizeUserFacingData(value.MqttRuntime).(model.MqttRuntimeStatus)
+		return value
+	case model.TimeRuntimeStatus:
+		value.LastErrorMessage = optionalUserVisibleErrorMessage(value.LastErrorMessage)
+		return value
+	case model.NetworkRuntimeStatus:
+		value.Message = optionalUserVisibleErrorMessage(value.Message)
+		return value
+	case model.MqttRuntimeStatus:
+		value.LastErrorMessage = optionalUserVisibleErrorMessage(value.LastErrorMessage)
+		value.LastPublishErrorMessage = optionalUserVisibleErrorMessage(value.LastPublishErrorMessage)
+		return value
+	case model.ModbusServerRuntimeStatus:
+		value.LastErrorMessage = optionalUserVisibleErrorMessage(value.LastErrorMessage)
+		return value
+	case model.ModbusServerPageSnapshot:
+		value.RuntimeStatus = localizeUserFacingData(value.RuntimeStatus).(model.ModbusServerRuntimeStatus)
 		return value
 	// 采集配置、历史数据与实时数据页面。
 	case model.ChannelsPageData:
 		value.BasePageData = localizeUserFacingData(value.BasePageData).(model.BasePageData)
-		value.SerialPortsState.ErrorMessage = optionalUserVisibleErrorMessage(value.SerialPortsState.ErrorMessage)
+		localizeSectionStates(&value.SerialPortsState)
 		for index := range value.Rows {
 			value.Rows[index].Status.LastErrorMessage = localizedStatusErrorMessage(
 				value.Rows[index].Status.Diagnosis,
@@ -576,10 +609,11 @@ func localizeUserFacingData(data interface{}) interface{} {
 		return value
 	case model.HistoryOverviewPageData:
 		value.BasePageData = localizeUserFacingData(value.BasePageData).(model.BasePageData)
+		localizeSectionStates(&value.MaintenanceState)
 		return value
 	case model.DeviceHistoryPageData:
 		value.BasePageData = localizeUserFacingData(value.BasePageData).(model.BasePageData)
-		value.HistoryState.ErrorMessage = optionalUserVisibleErrorMessage(value.HistoryState.ErrorMessage)
+		localizeSectionStates(&value.HistoryState)
 		return value
 	case model.RealtimePageData:
 		value.BasePageData = localizeUserFacingData(value.BasePageData).(model.BasePageData)

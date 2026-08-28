@@ -4,7 +4,6 @@ package httpserver
 
 import (
 	"log"
-	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -406,257 +405,22 @@ func decodeDeviceTemplateRequest(w http.ResponseWriter, r *http.Request) (model.
 		writeError(w, http.StatusBadRequest, "invalid_request", "模板 ID、设备类型名称和数据项不能为空")
 		return request, false
 	}
-	if message := validateDeviceTemplateReadModelRequest(&request); message != "" {
-		writeError(w, http.StatusBadRequest, "invalid_request", message)
-		return request, false
-	}
-	return request, true
-}
-
-type deviceTemplateReadRange struct {
-	key          string
-	functionCode int
-	start        uint64
-	end          uint64
-}
-
-type deviceTemplateFieldRange struct {
-	start    uint64
-	end      uint64
-	parserID string
-	bitIndex int
-}
-
-// deviceTemplateEnumRange 返回设备类型枚举字段允许的数值范围。
-func deviceTemplateEnumRange(field model.DeviceTemplateField) (int64, int64, bool) {
-	switch strings.ToLower(strings.TrimSpace(field.ParserID)) {
-	case "bit_uint16":
-		return 0, 1, true
-	case "scaled_high_uint8", "scaled_low_uint8":
-		return 0, 255, true
-	}
-	switch strings.ToLower(strings.TrimSpace(field.DataType)) {
-	case "uint16":
-		return 0, 65535, true
-	case "int16":
-		return -32768, 32767, true
-	case "uint32":
-		return 0, 4294967295, true
-	case "int32":
-		return -2147483648, 2147483647, true
-	default:
-		return 0, 0, false
-	}
-}
-
-// isSafeDeviceTemplateIdentifier 判断设备类型标识是否仅含安全字符。
-func isSafeDeviceTemplateIdentifier(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, character := range value {
-		if (character >= 'a' && character <= 'z') ||
-			(character >= '0' && character <= '9') || character == '_' || character == '-' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-// validateDeviceTemplateReadModelRequest 在 Web 边界校验页面提交的权威读取模型。
-func validateDeviceTemplateReadModelRequest(request *model.DeviceTemplateDefinition) string {
-	// 先校验设备级地址范围和必需的读取区块。
-	if request.DeviceAddressStride <= 0 {
-		return "设备地址跨度必须大于 0"
-	}
-	if request.DeviceAddressStride > 65536 {
-		return "设备地址跨度不能超过 Modbus 地址空间 65536"
-	}
-	if len(request.ReadBlocks) == 0 {
-		return "设备类型至少需要一个读取区块"
-	}
-
-	// 校验读取区块并建立索引，供后续采集点引用检查。
-	blocksByKey := make(map[string]model.DeviceTemplateReadBlock, len(request.ReadBlocks))
-	ranges := make([]deviceTemplateReadRange, 0, len(request.ReadBlocks))
-	for index, block := range request.ReadBlocks {
-		label := "读取区块[" + strconv.Itoa(index+1) + "]"
-		if strings.TrimSpace(block.BlockKey) == "" {
-			return label + " 标识不能为空"
-		}
-		if _, exists := blocksByKey[block.BlockKey]; exists {
-			return "读取区块标识重复：" + block.BlockKey
-		}
-		if strings.TrimSpace(block.DisplayName) == "" {
-			return label + " 显示名称不能为空"
-		}
-		if block.FunctionCode != 3 && block.FunctionCode != 4 {
-			return label + " 功能码仅支持 Modbus FC03 或 FC04"
-		}
-		if block.StartOffset < 0 || block.StartOffset > 65535 {
-			return label + " 起始偏移超出 Modbus 地址空间"
-		}
-		if block.RegisterCount < 1 || block.RegisterCount > 125 {
-			return label + " 寄存器数量必须为 1～125"
-		}
-		if block.SortOrder < 0 {
-			return label + " 顺序不能小于 0"
-		}
-		end := uint64(block.StartOffset) + uint64(block.RegisterCount)
-		if end > 65536 {
-			return label + " 超出 Modbus 地址空间"
-		}
-		if end > uint64(request.DeviceAddressStride) {
-			return label + " 超出设备地址跨度"
-		}
-		blocksByKey[block.BlockKey] = block
-		ranges = append(ranges, deviceTemplateReadRange{
-			key: block.BlockKey, functionCode: block.FunctionCode,
-			start: uint64(block.StartOffset), end: end,
-		})
-	}
-
-	// 同一功能码下的读取区块不得出现地址重叠。
-	for left := 0; left < len(ranges); left++ {
-		for right := left + 1; right < len(ranges); right++ {
-			first, second := ranges[left], ranges[right]
-			if first.functionCode == second.functionCode &&
-				first.start < second.end && second.start < first.end {
-				return "相同功能码读取区块地址重叠：" + first.key + " 与 " + second.key
-			}
-		}
-	}
-
-	// 规范化实时展示分组，并检查标识和排序的唯一性。
-	groupIDs := make(map[string]struct{}, len(request.RealtimeGroups))
-	groupOrders := make(map[int]struct{}, len(request.RealtimeGroups))
+	// 完整的 Modbus 地址、字段类型、枚举和重叠规则由 C++ 后端统一校验。
+	// Web 边界只保留页面输入的规范化，避免两套校验规则长期漂移。
 	for index := range request.RealtimeGroups {
-		group := &request.RealtimeGroups[index]
-		group.ID = strings.TrimSpace(group.ID)
-		group.Name = strings.TrimSpace(group.Name)
-		label := "实时展示分组[" + strconv.Itoa(index+1) + "]"
-		if !isSafeDeviceTemplateIdentifier(group.ID) {
-			return label + " ID 只能使用小写字母、数字、下划线和中划线"
-		}
-		if _, exists := groupIDs[group.ID]; exists {
-			return "实时展示分组 ID 重复：" + group.ID
-		}
-		groupIDs[group.ID] = struct{}{}
-		if group.Name == "" {
-			return label + "名称不能为空"
-		}
-		if len(group.Name) > 100 {
-			return label + "名称不能超过 100 个字节"
-		}
-		if group.Order < 0 {
-			return label + "顺序不能小于 0"
-		}
-		if _, exists := groupOrders[group.Order]; exists {
-			return label + "顺序不能重复"
-		}
-		groupOrders[group.Order] = struct{}{}
+		request.RealtimeGroups[index].ID = strings.TrimSpace(request.RealtimeGroups[index].ID)
+		request.RealtimeGroups[index].Name = strings.TrimSpace(request.RealtimeGroups[index].Name)
 	}
-	if request.RealtimeGroupingEnabled && len(request.RealtimeGroups) == 0 {
-		return "开启实时展示分组后至少需要一个分组"
-	}
-
-	// 校验采集点类型、枚举、区块引用及寄存器占用关系。
-	fieldRangesByBlock := make(map[string][]deviceTemplateFieldRange)
 	for index := range request.Fields {
 		field := &request.Fields[index]
-		label := "采集点[" + strconv.Itoa(index+1) + "]"
 		field.DataType = strings.ToLower(strings.TrimSpace(field.DataType))
 		field.ParserID = strings.ToLower(strings.TrimSpace(field.ParserID))
 		field.RealtimeGroupID = strings.TrimSpace(field.RealtimeGroupID)
-		if field.RealtimeGroupID != "" {
-			if _, exists := groupIDs[field.RealtimeGroupID]; !exists {
-				return label + " 引用的实时展示分组不存在：" + field.RealtimeGroupID
-			}
+		for enumIndex := range field.EnumItems {
+			field.EnumItems[enumIndex].Label = strings.TrimSpace(field.EnumItems[enumIndex].Label)
 		}
-		if request.RealtimeGroupingEnabled && field.ShowInRealtime && field.RealtimeGroupID == "" {
-			return label + " 已启用实时展示，必须选择实时展示分组"
-		}
-		isBit := field.DataType == "bool" || field.ParserID == "bit_uint16"
-		if isBit {
-			if field.DataType != "bool" || field.ParserID != "bit_uint16" {
-				return label + " bool 字段必须使用 parser_id=bit_uint16"
-			}
-			if field.RegisterCount != 1 || field.BitIndex < 0 || field.BitIndex > 15 {
-				return label + " bool 字段要求 register_count=1 且 bit_index 为 0～15"
-			}
-			if field.Scale != 1 || field.Offset != 0 || field.Precision != 0 {
-				return label + " bool 字段要求 scale=1、offset=0、precision=0"
-			}
-		} else {
-			if field.BitIndex != -1 {
-				return label + " 非 bool 字段 bit_index 必须为 -1"
-			}
-		}
-		if math.IsNaN(field.Scale) || math.IsInf(field.Scale, 0) ||
-			math.IsNaN(field.Offset) || math.IsInf(field.Offset, 0) {
-			return label + " 比例或偏移必须为有限数"
-		}
-		if len(field.EnumItems) > 32 {
-			return label + " 单字段枚举项不能超过 32 条"
-		}
-		if len(field.EnumItems) > 0 {
-			minimum, maximum, supported := deviceTemplateEnumRange(*field)
-			if !supported {
-				return label + " 当前字段类型不支持枚举显示"
-			}
-			if field.Scale != 1 || field.Offset != 0 || field.Precision != 0 {
-				return label + " 枚举字段要求 scale=1、offset=0、precision=0"
-			}
-			values := make(map[int64]struct{}, len(field.EnumItems))
-			for enumIndex := range field.EnumItems {
-				item := &field.EnumItems[enumIndex]
-				item.Label = strings.TrimSpace(item.Label)
-				if item.Label == "" {
-					return label + " 枚举显示文字不能为空"
-				}
-				if item.Value < minimum || item.Value > maximum {
-					return label + " 枚举值超出字段数据类型范围"
-				}
-				if _, exists := values[item.Value]; exists {
-					return label + " 枚举值不能重复"
-				}
-				values[item.Value] = struct{}{}
-			}
-		}
-		block, exists := blocksByKey[field.ReadBlockKey]
-		if !exists {
-			key := field.ReadBlockKey
-			if strings.TrimSpace(key) == "" {
-				key = "<空>"
-			}
-			return "采集点[" + strconv.Itoa(index+1) + "] 引用的读取区块不存在：" + key
-		}
-		if field.RegisterCount == 0 ||
-			uint64(field.RegisterOffset)+uint64(field.RegisterCount) > uint64(block.RegisterCount) {
-			return label + " 超出所属读取区块范围"
-		}
-		start := uint64(field.RegisterOffset)
-		end := start + uint64(field.RegisterCount)
-		for _, existing := range fieldRangesByBlock[field.ReadBlockKey] {
-			if start >= existing.end || existing.start >= end {
-				continue
-			}
-			sameRegister := start == existing.start && end == existing.end && end == start+1
-			distinctBits := sameRegister && field.ParserID == "bit_uint16" &&
-				existing.parserID == "bit_uint16" && field.BitIndex != existing.bitIndex
-			bytePair := sameRegister && ((field.ParserID == "scaled_high_uint8" && existing.parserID == "scaled_low_uint8") ||
-				(field.ParserID == "scaled_low_uint8" && existing.parserID == "scaled_high_uint8"))
-			if !distinctBits && !bytePair {
-				return label + " 寄存器范围与同一区块内其他字段重叠"
-			}
-		}
-		fieldRangesByBlock[field.ReadBlockKey] = append(fieldRangesByBlock[field.ReadBlockKey], deviceTemplateFieldRange{
-			start: start, end: end, parserID: field.ParserID, bitIndex: field.BitIndex,
-		})
 	}
-
-	return ""
+	return request, true
 }
 
 // handleCreateDeviceTemplate 处理设备类型创建请求。

@@ -92,6 +92,10 @@ type diagnosticRuntimeItem struct {
 	load  func() (any, error)
 }
 
+func bindDiagnosticLoad[T any](ctx context.Context, load func(context.Context) (T, error)) func() (any, error) {
+	return func() (any, error) { return load(ctx) }
+}
+
 type diagnosticCountingWriter struct {
 	writer io.Writer
 	size   int64
@@ -187,66 +191,39 @@ func (s *ConsoleService) WriteDiagnosticExport(
 	runtimeItems := []diagnosticRuntimeItem{
 		{
 			path: "runtime/系统运行快照.json", label: "系统运行快照",
-			load: func() (any, error) {
-				value, err := s.backend.GetSystemOverviewSnapshot(ctx)
-				return value, err
-			},
+			load: bindDiagnosticLoad(ctx, s.backend.GetSystemOverviewSnapshot),
 		},
 		{
 			path: "runtime/系统状态.json", label: "系统状态",
-			load: func() (any, error) {
-				value, err := s.backend.GetSystemStatus(ctx)
-				return value, err
-			},
+			load: bindDiagnosticLoad(ctx, s.backend.GetSystemStatus),
 		},
 		{
 			path: "runtime/轮询摘要.json", label: "轮询摘要",
-			load: func() (any, error) {
-				value, err := s.backend.GetPollingSummary(ctx)
-				return value, err
-			},
+			load: bindDiagnosticLoad(ctx, s.backend.GetPollingSummary),
 		},
 		{
 			path: "runtime/最近错误.json", label: "最近错误",
-			load: func() (any, error) {
-				value, err := s.backend.GetRecentError(ctx)
-				return value, err
-			},
+			load: bindDiagnosticLoad(ctx, s.backend.GetRecentError),
 		},
 		{
 			path: "runtime/配置摘要.json", label: "配置摘要",
-			load: func() (any, error) {
-				value, err := s.backend.GetConfigSummary(ctx)
-				return value, err
-			},
+			load: bindDiagnosticLoad(ctx, s.backend.GetConfigSummary),
 		},
 		{
 			path: "runtime/网络配置.json", label: "网络配置",
-			load: func() (any, error) {
-				value, err := s.backend.GetNetworkSettings(ctx)
-				return value, err
-			},
+			load: bindDiagnosticLoad(ctx, s.backend.GetNetworkSettings),
 		},
 		{
 			path: "runtime/网络运行状态.json", label: "网络运行状态",
-			load: func() (any, error) {
-				value, err := s.backend.GetNetworkRuntimeStatus(ctx)
-				return value, err
-			},
+			load: bindDiagnosticLoad(ctx, s.backend.GetNetworkRuntimeStatus),
 		},
 		{
 			path: "runtime/时间配置.json", label: "时间配置",
-			load: func() (any, error) {
-				value, err := s.getTimeSettings(ctx)
-				return value, err
-			},
+			load: bindDiagnosticLoad(ctx, s.backend.GetTimeSettings),
 		},
 		{
 			path: "runtime/时间运行状态.json", label: "时间运行状态",
-			load: func() (any, error) {
-				value, err := s.getTimeRuntimeStatus(ctx)
-				return value, err
-			},
+			load: bindDiagnosticLoad(ctx, s.backend.GetTimeRuntimeStatus),
 		},
 		{
 			path: "runtime/MQTT配置.json", label: "MQTT 配置",
@@ -258,10 +235,7 @@ func (s *ConsoleService) WriteDiagnosticExport(
 		},
 		{
 			path: "runtime/MQTT运行状态.json", label: "MQTT 运行状态",
-			load: func() (any, error) {
-				value, err := s.backend.GetMqttRuntimeStatus(ctx)
-				return value, err
-			},
+			load: bindDiagnosticLoad(ctx, s.backend.GetMqttRuntimeStatus),
 		},
 	}
 

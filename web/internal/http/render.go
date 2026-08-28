@@ -5,12 +5,14 @@ package httpserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	"edge-web/internal/ipc"
 	"edge-web/internal/model"
 )
 
@@ -41,7 +43,7 @@ func (s *Server) basePageData(title string, activeNav string, subtitle string, r
 	}
 	session, authenticated := s.sessionForRequest(r)
 	role := normalizeRole(session.Role)
-	permissions := permissionsForRole(role)
+	permissions := rolePermissions[role]
 	csrfToken := session.CSRFToken
 	if authenticated && csrfToken == "" {
 		// 正常登录路径创建会话时已经生成令牌；这里只保留旧会话状态的兼容兜底。
@@ -53,15 +55,12 @@ func (s *Server) basePageData(title string, activeNav string, subtitle string, r
 		ActiveNav:                  activeNav,
 		SystemDisplayName:          defaultSystemDisplayName,
 		BackendReachable:           true,
-		SocketPath:                 s.socketPath,
 		Authenticated:              authenticated,
 		CurrentUsername:            session.Username,
-		CurrentRole:                role,
 		CurrentRoleText:            roleText(role),
 		CSRFToken:                  csrfToken,
 		IsAdmin:                    authenticated && role == roleSuperAdmin,
 		CanModify:                  authenticated && permissions[permissionManageCollection],
-		Permissions:                permissions,
 		CanViewOverview:            authenticated && permissions[permissionViewOverview],
 		CanViewRealtime:            authenticated && permissions[permissionViewRealtime],
 		CanViewHistory:             authenticated && permissions[permissionViewHistory],
@@ -180,11 +179,35 @@ func (s *Server) renderPage(w http.ResponseWriter, page string, data interface{}
 
 func writeResult(w http.ResponseWriter, data interface{}, err error) {
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "backend_error", err.Error())
+		status, code, message := backendHTTPError(err)
+		writeError(w, status, code, message)
 		return
 	}
 
 	writeSuccess(w, localizeUserFacingData(data))
+}
+
+// backendHTTPError 把 IPC 业务状态统一映射为 HTTP 语义，所有 JSON API 共用同一规则。
+func backendHTTPError(err error) (int, string, string) {
+	status, code, message := http.StatusBadGateway, "backend_error", err.Error()
+	var callError *ipc.CallError
+	if !errors.As(err, &callError) {
+		return status, code, message
+	}
+
+	code, message = callError.Code, callError.Message
+	switch callError.Code {
+	case "invalid_argument":
+		status = http.StatusBadRequest
+		if strings.Contains(callError.Message, "冲突") {
+			status = http.StatusConflict
+		}
+	case "not_found":
+		status = http.StatusNotFound
+	case "invalid_state", "io_error", "timeout", "server_busy":
+		status = http.StatusServiceUnavailable
+	}
+	return status, code, message
 }
 
 func writeSuccess(w http.ResponseWriter, data interface{}) {

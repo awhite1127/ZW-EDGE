@@ -19,49 +19,34 @@ func (s *ConsoleService) GetDeviceDetail(ctx context.Context, deviceID string) (
 	}
 
 	// 并行获取历史视图、设备类型和运行状态，缩短详情弹窗加载时间。
-	var (
-		view          model.DeviceHistoryView
-		configSummary model.ConfigSummary
-		systemStatus  model.SystemStatus
-		viewErr       error
-		statusErr     error
-		wg            sync.WaitGroup
-	)
-	wg.Add(3)
-	go func() {
-		defer wg.Done()
-		view, viewErr = s.backend.GetDeviceHistoryView(ctx, model.DeviceHistoryQuery{DeviceID: deviceID, Days: 30})
-	}()
-	go func() {
-		defer wg.Done()
-		configSummary, _ = s.backend.GetConfigSummary(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		systemStatus, statusErr = s.backend.GetSystemStatus(ctx)
-	}()
+	var wg sync.WaitGroup
+	view := startLoad(ctx, &wg, func(ctx context.Context) (model.DeviceHistoryView, error) {
+		return s.backend.GetDeviceHistoryView(ctx, model.DeviceHistoryQuery{DeviceID: deviceID, Days: 30})
+	})
+	configSummary := startLoad(ctx, &wg, s.backend.GetConfigSummary)
+	systemStatus := startLoad(ctx, &wg, s.backend.GetSystemStatus)
 	wg.Wait()
 
-	if viewErr != nil {
-		return model.DeviceDetailResponse{}, viewErr
+	if view.err != nil {
+		return model.DeviceDetailResponse{}, view.err
 	}
 
 	// 设备类型由 controller 单一提供；摘要不可用或引用失效时只展示未知类型，
 	// 不在 Web 侧注入另一套字段和写命令定义。
-	templates := normalizedDeviceTemplates(configSummary.DeviceTemplates)
-	template, hasTemplate := model.FindDeviceTemplateIn(templates, view.Master.DeviceTemplate)
+	templates := normalizedDeviceTemplates(configSummary.value.DeviceTemplates)
+	template, hasTemplate := model.FindDeviceTemplateIn(templates, view.value.Master.DeviceTemplate)
 	if !hasTemplate {
 		template = model.DeviceTemplateDefinition{
-			ID:          view.Master.DeviceTemplate,
-			DisplayName: defaultString(view.Master.DeviceTemplate, "未知设备类型"),
+			ID:          view.value.Master.DeviceTemplate,
+			DisplayName: defaultString(view.value.Master.DeviceTemplate, "未知设备类型"),
 		}
 	}
 
 	// 从系统状态中定位当前设备，并整理最近历史记录。
 	status, hasStatus := model.DeviceStatus{}, false
-	if statusErr == nil {
-		for _, item := range systemStatus.DeviceStatusList {
-			if item.DeviceID == view.Device.DeviceID {
+	if systemStatus.err == nil {
+		for _, item := range systemStatus.value.DeviceStatusList {
+			if item.DeviceID == view.value.Device.DeviceID {
 				status = item
 				hasStatus = true
 				break
@@ -69,7 +54,7 @@ func (s *ConsoleService) GetDeviceDetail(ctx context.Context, deviceID string) (
 		}
 	}
 
-	history := normalizeDeviceHistoryRecords(view.HistoryRecords)
+	history := normalizeDeviceHistoryRecords(view.value.HistoryRecords)
 	historyRows := buildDeviceHistoryRows(history)
 	if len(historyRows) > 10 {
 		historyRows = historyRows[:10]
@@ -88,7 +73,7 @@ func (s *ConsoleService) GetDeviceDetail(ctx context.Context, deviceID string) (
 		updatedAt = maxUint64(status.LastSuccessTimeMS, status.LastFailureTimeMS)
 	}
 	detailStatus := model.DeviceDetailStatus{
-		Enabled:              view.Device.Enabled,
+		Enabled:              view.value.Device.Enabled,
 		Online:               hasStatus && status.Online,
 		HasStatus:            hasStatus,
 		CommunicationQuality: qualityText(status.CommunicationQuality),
@@ -100,19 +85,19 @@ func (s *ConsoleService) GetDeviceDetail(ctx context.Context, deviceID string) (
 
 	// 合并配置、点位、写命令和历史摘要，形成完整详情响应。
 	return model.DeviceDetailResponse{
-		Device:       view.Device,
-		DeviceLabel:  defaultString(view.Device.DeviceName, view.Device.DeviceID),
+		Device:       view.value.Device,
+		DeviceLabel:  defaultString(view.value.Device.DeviceName, view.value.Device.DeviceID),
 		TemplateID:   template.ID,
 		TemplateName: defaultString(template.DisplayName, template.ID),
-		Master:       view.Master,
-		MasterLabel:  defaultString(view.Master.MasterName, view.Master.MasterID),
-		Channel:      view.Channel,
-		ChannelLabel: defaultString(view.Channel.ChannelName, view.Channel.ChannelID),
-		ProtocolText: masterProtocolText(view.Master.Protocol),
-		SlaveAddress: view.Master.TargetAddress,
+		Master:       view.value.Master,
+		MasterLabel:  defaultString(view.value.Master.MasterName, view.value.Master.MasterID),
+		Channel:      view.value.Channel,
+		ChannelLabel: defaultString(view.value.Channel.ChannelName, view.value.Channel.ChannelID),
+		ProtocolText: masterProtocolText(view.value.Master.Protocol),
+		SlaveAddress: view.value.Master.TargetAddress,
 		Status:       detailStatus,
 		ReadProfile: model.DeviceDetailReadProfile{
-			TrueStartRegister:   uint32(view.Master.BlockStartRegister) + uint32(view.Device.RegisterOffset),
+			TrueStartRegister:   uint32(view.value.Master.BlockStartRegister) + uint32(view.value.Device.RegisterOffset),
 			DeviceAddressStride: template.DeviceAddressStride,
 			ReadBlocks:          append([]model.DeviceTemplateReadBlock(nil), template.ReadBlocks...),
 			SummaryFields:       summaryFields,

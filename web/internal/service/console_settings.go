@@ -21,13 +21,8 @@ func (s *ConsoleService) GetConfigSummary(ctx context.Context) (model.ConfigSumm
 	return summary, err
 }
 
-func (s *ConsoleService) GetDeviceTemplateManagement(ctx context.Context) (model.DeviceTemplateManagementView, error) {
-	view, err := s.backend.GetDeviceTemplateManagement(ctx)
-	return normalizeDeviceTemplateManagement(view), err
-}
-
 func (s *ConsoleService) GetEditableDeviceTemplate(ctx context.Context, templateID string) (model.DeviceTemplateDefinition, bool, error) {
-	view, err := s.GetDeviceTemplateManagement(ctx)
+	view, err := s.backend.GetDeviceTemplateManagement(ctx)
 	if err != nil {
 		return model.DeviceTemplateDefinition{}, false, err
 	}
@@ -132,14 +127,6 @@ func (s *ConsoleService) invalidateSystemDisplayName() {
 
 const settingsTemplatePageSize = 8
 
-func (s *ConsoleService) getTimeSettings(ctx context.Context) (model.TimeSettings, error) {
-	return s.backend.GetTimeSettings(ctx)
-}
-
-func (s *ConsoleService) getTimeRuntimeStatus(ctx context.Context) (model.TimeRuntimeStatus, error) {
-	return s.backend.GetTimeRuntimeStatus(ctx)
-}
-
 // loadDeviceTemplateSettingsSources 只读取设备类型子页面实际需要的系统标题和模板清单。
 func (s *ConsoleService) loadDeviceTemplateSettingsSources(ctx context.Context) (
 	model.SystemSettings,
@@ -147,24 +134,11 @@ func (s *ConsoleService) loadDeviceTemplateSettingsSources(ctx context.Context) 
 	error,
 	error,
 ) {
-	var (
-		settings           model.SystemSettings
-		templateManagement model.DeviceTemplateManagementView
-		settingsErr        error
-		templateErr        error
-		wg                 sync.WaitGroup
-	)
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		settings, settingsErr = s.backend.GetSystemSettings(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		templateManagement, templateErr = s.GetDeviceTemplateManagement(ctx)
-	}()
+	var wg sync.WaitGroup
+	settings := startLoad(ctx, &wg, s.backend.GetSystemSettings)
+	templates := startLoad(ctx, &wg, s.backend.GetDeviceTemplateManagement)
 	wg.Wait()
-	return settings, displayDeviceTemplateManagement(templateManagement), settingsErr, templateErr
+	return settings.value, displayDeviceTemplateManagement(templates.value), settings.err, templates.err
 }
 
 func buildDeviceTemplateSettingsPage(
@@ -224,172 +198,112 @@ func (s *ConsoleService) LoadDeviceTemplateEditorSettings(
 
 // LoadMqttSettingsPage 只读取 MQTT 子页面渲染和运行态刷新需要的数据。
 func (s *ConsoleService) LoadMqttSettingsPage(ctx context.Context) model.SettingsPageData {
-	var (
-		settings       model.SystemSettings
-		mqtt           model.MqttSettings
-		mqttRuntime    model.MqttRuntimeStatus
-		settingsErr    error
-		mqttErr        error
-		mqttRuntimeErr error
-		wg             sync.WaitGroup
-	)
-	wg.Add(3)
-	go func() {
-		defer wg.Done()
-		settings, settingsErr = s.backend.GetSystemSettings(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		mqtt, mqttErr = s.backend.GetMqttSettings(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		mqttRuntime, mqttRuntimeErr = s.backend.GetMqttRuntimeStatus(ctx)
-	}()
+	var wg sync.WaitGroup
+	settings := startLoad(ctx, &wg, s.backend.GetSystemSettings)
+	mqtt := startLoad(ctx, &wg, s.backend.GetMqttSettings)
+	mqttRuntime := startLoad(ctx, &wg, s.backend.GetMqttRuntimeStatus)
 	wg.Wait()
 
 	pageData := model.SettingsPageData{
 		BasePageData:       model.BasePageData{BackendReachable: true},
-		Settings:           settings,
+		Settings:           settings.value,
 		SettingsState:      model.SectionState{Available: true},
-		Mqtt:               mqtt,
+		Mqtt:               mqtt.value,
 		MqttState:          model.SectionState{Available: true},
-		MqttRuntime:        mqttRuntime,
+		MqttRuntime:        mqttRuntime.value,
 		MqttRuntimeState:   model.SectionState{Available: true},
 		SettingsReturnPath: "/settings/mqtt",
 	}
-	if settingsErr != nil {
+	if settings.err != nil {
 		pageData.Settings = defaultSystemSettings()
-		pageData.SettingsState = model.SectionState{ErrorMessage: settingsErr.Error()}
+		pageData.SettingsState = model.SectionState{ErrorMessage: settings.err.Error()}
 	}
-	if mqttErr != nil {
+	if mqtt.err != nil {
 		pageData.Mqtt = defaultMqttSettings()
-		pageData.MqttState = model.SectionState{ErrorMessage: mqttErr.Error()}
+		pageData.MqttState = model.SectionState{ErrorMessage: mqtt.err.Error()}
 	}
-	if mqttRuntimeErr != nil {
+	if mqttRuntime.err != nil {
 		pageData.MqttRuntime = defaultMqttRuntimeStatus(pageData.Mqtt.Enabled)
-		pageData.MqttRuntimeState = model.SectionState{ErrorMessage: mqttRuntimeErr.Error()}
+		pageData.MqttRuntimeState = model.SectionState{ErrorMessage: mqttRuntime.err.Error()}
 	}
-	if settingsErr != nil && mqttErr != nil && mqttRuntimeErr != nil {
+	if settings.err != nil && mqtt.err != nil && mqttRuntime.err != nil {
 		pageData.BasePageData.BackendReachable = false
 		pageData.BasePageData.ErrorMessage = "后端不可达，MQTT 设置暂时无法获取"
 	}
 	return pageData
 }
 
-func (s *ConsoleService) LoadSettings(ctx context.Context, requestedTemplatePage int) model.SettingsPageData {
+func (s *ConsoleService) LoadSettings(ctx context.Context) model.SettingsPageData {
 	// 设置页将多个可选能力放在同一屏，任意一块失败时使用默认值降级渲染，避免整页不可用。
-	var (
-		settings           model.SystemSettings
-		timeSettings       model.TimeSettings
-		timeRuntime        model.TimeRuntimeStatus
-		network            model.NetworkSettings
-		networkRuntime     model.NetworkRuntimeStatus
-		mqtt               model.MqttSettings
-		mqttRuntime        model.MqttRuntimeStatus
-		templateManagement model.DeviceTemplateManagementView
-		err                error
-		timeSettingsErr    error
-		timeRuntimeErr     error
-		networkErr         error
-		networkRuntimeErr  error
-		mqttErr            error
-		mqttRuntimeErr     error
-		templateErr        error
-		wg                 sync.WaitGroup
-	)
-	wg.Add(8)
-	go func() {
-		defer wg.Done()
-		settings, err = s.backend.GetSystemSettings(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		timeSettings, timeSettingsErr = s.getTimeSettings(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		timeRuntime, timeRuntimeErr = s.getTimeRuntimeStatus(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		network, networkErr = s.backend.GetNetworkSettings(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		networkRuntime, networkRuntimeErr = s.backend.GetNetworkRuntimeStatus(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		mqtt, mqttErr = s.backend.GetMqttSettings(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		mqttRuntime, mqttRuntimeErr = s.backend.GetMqttRuntimeStatus(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		templateManagement, templateErr = s.GetDeviceTemplateManagement(ctx)
-	}()
+	var wg sync.WaitGroup
+	settings := startLoad(ctx, &wg, s.backend.GetSystemSettings)
+	timeSettings := startLoad(ctx, &wg, s.backend.GetTimeSettings)
+	timeRuntime := startLoad(ctx, &wg, s.backend.GetTimeRuntimeStatus)
+	network := startLoad(ctx, &wg, s.backend.GetNetworkSettings)
+	networkRuntime := startLoad(ctx, &wg, s.backend.GetNetworkRuntimeStatus)
+	mqtt := startLoad(ctx, &wg, s.backend.GetMqttSettings)
+	mqttRuntime := startLoad(ctx, &wg, s.backend.GetMqttRuntimeStatus)
+	// 首页只展示模板总数，不再为不可见的明细做深拷贝、格式化和分页。
+	templates := startLoad(ctx, &wg, s.backend.GetDeviceTemplateManagement)
 	wg.Wait()
+	templateSummary := templates.value
+	templateSummary.Templates = nil
 
-	displayTemplates := displayDeviceTemplateManagement(templateManagement)
-	pagedTemplates, templatePagination := paginateDeviceTemplateManagement(displayTemplates, requestedTemplatePage)
 	pageData := model.SettingsPageData{
 		BasePageData:             model.BasePageData{BackendReachable: true},
-		Settings:                 settings,
+		Settings:                 settings.value,
 		SettingsState:            model.SectionState{Available: true},
-		TimeSettings:             timeSettings,
+		TimeSettings:             timeSettings.value,
 		TimeSettingsState:        model.SectionState{Available: true},
-		TimeRuntime:              timeRuntime,
+		TimeRuntime:              timeRuntime.value,
 		TimeRuntimeState:         model.SectionState{Available: true},
-		Network:                  network,
+		Network:                  network.value,
 		NetworkState:             model.SectionState{Available: true},
-		NetworkRuntime:           networkRuntime,
+		NetworkRuntime:           networkRuntime.value,
 		NetworkRuntimeState:      model.SectionState{Available: true},
-		NetworkDNSInput:          strings.Join(network.DNSServers, ","),
-		Mqtt:                     mqtt,
+		NetworkDNSInput:          strings.Join(network.value.DNSServers, ","),
+		Mqtt:                     mqtt.value,
 		MqttState:                model.SectionState{Available: true},
-		MqttRuntime:              mqttRuntime,
+		MqttRuntime:              mqttRuntime.value,
 		MqttRuntimeState:         model.SectionState{Available: true},
-		DeviceTemplateManagement: pagedTemplates,
+		DeviceTemplateManagement: templateSummary,
 		DeviceTemplateState:      model.SectionState{Available: true},
-		DeviceTemplatePagination: templatePagination,
-		SettingsReturnPath:       fmt.Sprintf("/settings?template_page=%d", templatePagination.Page),
+		SettingsReturnPath:       "/settings",
 	}
-	if err != nil {
+	if settings.err != nil {
 		pageData.Settings = defaultSystemSettings()
-		pageData.SettingsState = model.SectionState{ErrorMessage: err.Error()}
+		pageData.SettingsState = model.SectionState{ErrorMessage: settings.err.Error()}
 	}
-	if timeSettingsErr != nil {
+	if timeSettings.err != nil {
 		pageData.TimeSettings = defaultTimeSettings()
-		pageData.TimeSettingsState = model.SectionState{ErrorMessage: timeSettingsErr.Error()}
+		pageData.TimeSettingsState = model.SectionState{ErrorMessage: timeSettings.err.Error()}
 	}
-	if timeRuntimeErr != nil {
+	if timeRuntime.err != nil {
 		pageData.TimeRuntime = defaultTimeRuntimeStatus(pageData.TimeSettings)
-		pageData.TimeRuntimeState = model.SectionState{ErrorMessage: timeRuntimeErr.Error()}
+		pageData.TimeRuntimeState = model.SectionState{ErrorMessage: timeRuntime.err.Error()}
 	}
-	if networkErr != nil {
+	if network.err != nil {
 		pageData.Network = defaultNetworkSettings()
-		pageData.NetworkState = model.SectionState{ErrorMessage: networkErr.Error()}
+		pageData.NetworkState = model.SectionState{ErrorMessage: network.err.Error()}
 		pageData.NetworkDNSInput = strings.Join(pageData.Network.DNSServers, ",")
 	}
-	if networkRuntimeErr != nil {
+	if networkRuntime.err != nil {
 		pageData.NetworkRuntime = defaultNetworkRuntimeStatus(pageData.Network.InterfaceName)
-		pageData.NetworkRuntimeState = model.SectionState{ErrorMessage: networkRuntimeErr.Error()}
+		pageData.NetworkRuntimeState = model.SectionState{ErrorMessage: networkRuntime.err.Error()}
 	}
-	if mqttErr != nil {
+	if mqtt.err != nil {
 		pageData.Mqtt = defaultMqttSettings()
-		pageData.MqttState = model.SectionState{ErrorMessage: mqttErr.Error()}
+		pageData.MqttState = model.SectionState{ErrorMessage: mqtt.err.Error()}
 	}
-	if mqttRuntimeErr != nil {
+	if mqttRuntime.err != nil {
 		pageData.MqttRuntime = defaultMqttRuntimeStatus(pageData.Mqtt.Enabled)
-		pageData.MqttRuntimeState = model.SectionState{ErrorMessage: mqttRuntimeErr.Error()}
+		pageData.MqttRuntimeState = model.SectionState{ErrorMessage: mqttRuntime.err.Error()}
 	}
-	if templateErr != nil {
-		pageData.DeviceTemplateState = model.SectionState{ErrorMessage: templateErr.Error()}
+	if templates.err != nil {
+		pageData.DeviceTemplateState = model.SectionState{ErrorMessage: templates.err.Error()}
 	}
-	if err != nil && timeSettingsErr != nil && networkErr != nil && mqttErr != nil && templateErr != nil {
+	if settings.err != nil && timeSettings.err != nil && network.err != nil &&
+		mqtt.err != nil && templates.err != nil {
 		pageData.BasePageData.BackendReachable = false
 		pageData.BasePageData.ErrorMessage = "后端不可达，系统设置暂时无法获取"
 	}
@@ -397,54 +311,36 @@ func (s *ConsoleService) LoadSettings(ctx context.Context, requestedTemplatePage
 }
 
 func (s *ConsoleService) LoadSettingsRuntimeStatus(ctx context.Context) model.SettingsRuntimeStatusResponse {
-	var (
-		networkRuntime    model.NetworkRuntimeStatus
-		mqttRuntime       model.MqttRuntimeStatus
-		timeRuntime       model.TimeRuntimeStatus
-		networkRuntimeErr error
-		mqttRuntimeErr    error
-		timeRuntimeErr    error
-		wg                sync.WaitGroup
-	)
-	wg.Add(3)
-	go func() {
-		defer wg.Done()
-		networkRuntime, networkRuntimeErr = s.backend.GetNetworkRuntimeStatus(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		mqttRuntime, mqttRuntimeErr = s.backend.GetMqttRuntimeStatus(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		timeRuntime, timeRuntimeErr = s.getTimeRuntimeStatus(ctx)
-	}()
+	var wg sync.WaitGroup
+	networkRuntime := startLoad(ctx, &wg, s.backend.GetNetworkRuntimeStatus)
+	mqttRuntime := startLoad(ctx, &wg, s.backend.GetMqttRuntimeStatus)
+	timeRuntime := startLoad(ctx, &wg, s.backend.GetTimeRuntimeStatus)
 	wg.Wait()
 	result := model.SettingsRuntimeStatusResponse{
 		BackendReachable:        true,
-		NetworkRuntime:          networkRuntime,
+		NetworkRuntime:          networkRuntime.value,
 		NetworkRuntimeAvailable: true,
-		MqttRuntime:             mqttRuntime,
+		MqttRuntime:             mqttRuntime.value,
 		MqttRuntimeAvailable:    true,
-		TimeRuntime:             timeRuntime,
+		TimeRuntime:             timeRuntime.value,
 		TimeRuntimeAvailable:    true,
 	}
-	if networkRuntimeErr != nil {
+	if networkRuntime.err != nil {
 		result.NetworkRuntime = defaultNetworkRuntimeStatus("")
 		result.NetworkRuntimeAvailable = false
-		result.NetworkRuntimeError = networkRuntimeErr.Error()
+		result.NetworkRuntimeError = networkRuntime.err.Error()
 	}
-	if mqttRuntimeErr != nil {
+	if mqttRuntime.err != nil {
 		result.MqttRuntime = defaultMqttRuntimeStatus(false)
 		result.MqttRuntimeAvailable = false
-		result.MqttRuntimeError = mqttRuntimeErr.Error()
+		result.MqttRuntimeError = mqttRuntime.err.Error()
 	}
-	if timeRuntimeErr != nil {
+	if timeRuntime.err != nil {
 		result.TimeRuntime = defaultTimeRuntimeStatus(defaultTimeSettings())
 		result.TimeRuntimeAvailable = false
-		result.TimeRuntimeError = timeRuntimeErr.Error()
+		result.TimeRuntimeError = timeRuntime.err.Error()
 	}
-	if networkRuntimeErr != nil && mqttRuntimeErr != nil && timeRuntimeErr != nil {
+	if networkRuntime.err != nil && mqttRuntime.err != nil && timeRuntime.err != nil {
 		result.BackendReachable = false
 	}
 	return result

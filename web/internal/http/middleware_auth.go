@@ -172,11 +172,6 @@ func validateCSRFToken(r *http.Request, expected string) csrfValidationResult {
 	return csrfValidationResult{valid: true}
 }
 
-// csrfTokenValid 以常量时间比较 CSRF 令牌。
-func csrfTokenValid(r *http.Request, expected string) bool {
-	return validateCSRFToken(r, expected).valid
-}
-
 // logSecurityRejection 记录安全拒绝。
 func logSecurityRejection(r *http.Request, reason string) {
 	log.Printf("Web 安全校验拒绝请求: reason=%s method=%s path=%s", reason, r.Method, r.URL.Path)

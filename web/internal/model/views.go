@@ -22,15 +22,12 @@ type BasePageData struct {
 	ActiveNav                  string
 	SystemDisplayName          string
 	BackendReachable           bool
-	SocketPath                 string
 	Authenticated              bool
 	CurrentUsername            string
-	CurrentRole                string
 	CurrentRoleText            string
 	CSRFToken                  string
 	IsAdmin                    bool
 	CanModify                  bool
-	Permissions                map[string]bool
 	CanViewOverview            bool
 	CanViewRealtime            bool
 	CanViewHistory             bool
@@ -291,9 +288,6 @@ type OperationsPageData struct {
 	Maintenance      DataMaintenanceSummary
 	MaintenanceState SectionState
 	Roles            []RolePermissionView
-	UpdateVersion    UpdateVersion
-	UpdateStatus     UpdateStatus
-	UpdateState      SectionState
 }
 
 type RolePermissionView struct {
