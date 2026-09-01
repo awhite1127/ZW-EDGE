@@ -42,6 +42,8 @@ const char* status_code_name(StatusCode status)
         return "kProtocolError";
     case StatusCode::kInternalError:
         return "kInternalError";
+    case StatusCode::kConflict:
+        return "kConflict";
     }
     return "kUnknown";
 }

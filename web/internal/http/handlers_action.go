@@ -279,7 +279,7 @@ func (s *Server) handleAcknowledgeActiveAlarmAction(w http.ResponseWriter, r *ht
 }
 
 func parseAlarmRuleForm(r *http.Request) (model.MasterAlarmRuleRequest, model.ActionFeedback) {
-	// 表单校验在 HTTP 层先给出字段级提示；更完整的业务边界仍由 ConsoleService 复核。
+	// 表单校验在 HTTP 层先给出字段级提示；完整业务边界由后端领域 validator 复核。
 	masterID := strings.TrimSpace(r.FormValue("master_id"))
 	if masterID == "" {
 		return model.MasterAlarmRuleRequest{}, model.ActionFeedback{Success: false, Message: "请选择主站"}
@@ -404,8 +404,8 @@ func (s *Server) respondAlarmFeedback(w http.ResponseWriter, r *http.Request, fe
 	writeJSON(w, status, model.APIResponse{
 		Success: false,
 		Error: &model.APIError{
-			Code:    "alarm_rule_failed",
-			Message: message,
+			Code: "alarm_rule_failed", Domain: "service", Message: message,
+			Params: map[string]interface{}{}, Retryable: false,
 		},
 	})
 }
@@ -644,8 +644,8 @@ func (s *Server) respondNetworkFeedback(w http.ResponseWriter, r *http.Request, 
 	writeJSON(w, status, model.APIResponse{
 		Success: false,
 		Error: &model.APIError{
-			Code:    "network_save_apply_failed",
-			Message: message,
+			Code: "network_save_apply_failed", Domain: "service", Message: message,
+			Params: map[string]interface{}{}, Retryable: true,
 		},
 	})
 }

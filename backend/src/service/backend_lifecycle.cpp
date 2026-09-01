@@ -287,12 +287,13 @@ void BackendService::shutdown()
         initialized_ = false;
         applied_time_settings_ = {};
         applied_time_settings_initialized_ = false;
-        system_status_.polling_running = false;
-        system_status_.running = false;
-        system_status_.service_ready = false;
-        system_status_.stopped_at_ms = time_utils::system_now_ms();
-        system_status_.last_status_message = "后端服务已停止";
-        sync_system_status_to_store();
+        auto runtime_status = data_store_.get_system_status();
+        runtime_status.polling_running = false;
+        runtime_status.running = false;
+        runtime_status.service_ready = false;
+        runtime_status.stopped_at_ms = time_utils::system_now_ms();
+        runtime_status.last_status_message = "后端服务已停止";
+        data_store_.update_system_status(runtime_status);
     }
     // initialized_ 已撤销后，后续管理调用会在 service_mutex_ 内稳定返回 invalid_state。
     modbus_management_lock.unlock();
@@ -601,7 +602,6 @@ StatusCode BackendService::ensure_channel_ready_for_master(
     if (!channel->is_open()) {
         const auto open_status = channel->open();
         refresh_channel_statuses();
-        load_system_status_from_store();
         if (!is_ok(open_status)) {
             if (error_message != nullptr) {
                 *error_message = !channel->status().last_error_message.empty()

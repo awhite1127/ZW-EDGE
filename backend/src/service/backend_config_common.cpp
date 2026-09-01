@@ -413,12 +413,14 @@ StatusCode BackendService::validate_synced_auto_devices_locked(
         }
     }
 
+    bool has_conflict = false;
     for (const auto& left : config.devices) {
         for (const auto& right : config.devices) {
             if (left.device_id >= right.device_id || left.master_id != right.master_id) {
                 continue;
             }
             if (left.register_offset == right.register_offset) {
+                has_conflict = true;
                 add_error(
                     "主控 " + left.master_id + " 下设备基地址偏移重复，冲突设备为 " +
                     left.device_id + " 和 " + right.device_id);
@@ -430,7 +432,7 @@ StatusCode BackendService::validate_synced_auto_devices_locked(
         if (errors != nullptr) {
             errors->insert(errors->end(), local_errors.begin(), local_errors.end());
         }
-        return StatusCode::kInvalidArgument;
+        return has_conflict ? StatusCode::kConflict : StatusCode::kInvalidArgument;
     }
     return StatusCode::kOk;
 }

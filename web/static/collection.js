@@ -90,10 +90,10 @@
         }
 
         tabs.forEach(function (tab) {
-            tab.addEventListener("click", function () {
+            pageScope.listen(tab, "click", function () {
                 activatePanel(tab.dataset.collectionTab, true);
             });
-            tab.addEventListener("keydown", function (event) {
+            pageScope.listen(tab, "keydown", function (event) {
                 const keys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"];
                 if (!keys.includes(event.key)) return;
                 event.preventDefault();
@@ -134,7 +134,7 @@
         let deviceId = "";
 
         document.querySelectorAll("[data-device-name-open]").forEach(function (button) {
-            button.addEventListener("click", function () {
+            pageScope.listen(button, "click", function () {
                 deviceId = button.dataset.deviceId || "";
                 systemName.value = button.dataset.systemName || button.dataset.displayName || "";
                 displayName.value = button.dataset.displayName || "";
@@ -146,9 +146,9 @@
             });
         });
         modal.querySelectorAll("[data-device-name-close]").forEach(function (button) {
-            button.addEventListener("click", function () { closeModal(modal); });
+            pageScope.listen(button, "click", function () { closeModal(modal); });
         });
-        form.addEventListener("submit", async function (event) {
+        pageScope.listen(form, "submit", async function (event) {
             event.preventDefault();
             const value = String(displayName.value || "").trim();
             if (Array.from(value).length > 40) {
@@ -320,7 +320,7 @@
             }
         }
 
-        openButton.addEventListener("click", function () {
+        pageScope.listen(openButton, "click", function () {
             failures.classList.add("hidden");
             failures.replaceChildren();
             buildPreview();
@@ -329,13 +329,13 @@
             prefix.select();
         });
         modal.querySelectorAll("[data-device-batch-name-close]").forEach(function (button) {
-            button.addEventListener("click", function () { closeModal(modal); });
+            pageScope.listen(button, "click", function () { closeModal(modal); });
         });
         [scope, master, prefix, start, digits, separator].forEach(function (field) {
-            field.addEventListener("input", buildPreview);
-            field.addEventListener("change", buildPreview);
+            pageScope.listen(field, "input", buildPreview);
+            pageScope.listen(field, "change", buildPreview);
         });
-        form.addEventListener("submit", function (event) {
+        pageScope.listen(form, "submit", function (event) {
             event.preventDefault();
             const preview = buildPreview();
             if (preview.error) return;
@@ -343,7 +343,7 @@
                 return { device_id: device.id, display_name: device.newName };
             }), submit, "正在应用...", "已批量更新 ");
         });
-        restore.addEventListener("click", async function () {
+        pageScope.listen(restore, "click", async function () {
             const selected = selectedDevices();
             if (!selected.length) return;
             if (!await confirmAction({
@@ -394,19 +394,19 @@
         }
 
         tabButtons.forEach(function (button) {
-            button.addEventListener("click", function () {
+            pageScope.listen(button, "click", function () {
                 selectDeviceDetailTab(button.dataset.deviceDetailTab || "basic");
             });
         });
 
         modal.querySelectorAll("[data-device-detail-close]").forEach(function (button) {
-            button.addEventListener("click", function () {
+            pageScope.listen(button, "click", function () {
                 closeModal(modal);
             });
         });
 
         document.querySelectorAll("[data-device-detail-open]").forEach(function (button) {
-            button.addEventListener("click", function () {
+            pageScope.listen(button, "click", function () {
                 const deviceId = button.dataset.deviceId || "";
                 openModal(modal);
                 renderDeviceDetailLoading(deviceId);
@@ -655,13 +655,13 @@
             }
             commands.innerHTML = renderDeviceCommandGroups(detail, commandList);
             commands.querySelectorAll("[data-device-command-form]").forEach(function (form) {
-                form.addEventListener("submit", function (event) {
+                pageScope.listen(form, "submit", function (event) {
                     event.preventDefault();
                     executeDeviceCommand(form);
                 });
             });
             commands.querySelectorAll("[data-em100-record-read]").forEach(function (button) {
-                button.addEventListener("click", function () {
+                pageScope.listen(button, "click", function () {
                     readEM100Record(button.dataset.em100RecordRead || "event");
                 });
             });
@@ -1205,10 +1205,10 @@
         }
 
         if (refreshButton) {
-            refreshButton.addEventListener("click", loadTraces);
+            pageScope.listen(refreshButton, "click", loadTraces);
         }
         if (clearButton) {
-            clearButton.addEventListener("click", clearTraces);
+            pageScope.listen(clearButton, "click", clearTraces);
         }
 
         loadTraces();
@@ -1248,7 +1248,7 @@
 
             updateChannelTypeSections(form);
             if (typeSelect) {
-                typeSelect.addEventListener("change", function () {
+                pageScope.listen(typeSelect, "change", function () {
                     updateChannelTypeSections(form);
                 });
             }
@@ -1256,7 +1256,7 @@
             // 不可用串口候选项需要用户再次确认后才能保留。
             if (select) {
                 let lastValue = select.value;
-                select.addEventListener("change", async function () {
+                pageScope.listen(select, "change", async function () {
                     if (!select.value) {
                         lastValue = select.value;
                         return;
@@ -1278,7 +1278,7 @@
             }
 
             // 校验表单并提交 JSON，提交期间禁止重复操作。
-            form.addEventListener("submit", async function (event) {
+            pageScope.listen(form, "submit", async function (event) {
                 event.preventDefault();
 
                 const payload = buildChannelPayload(form);
@@ -1334,7 +1334,7 @@
     // 绑定通道删除按钮和确认流程。
     function bindChannelDeleteButtons() {
         document.querySelectorAll("[data-channel-delete]").forEach(function (button) {
-            button.addEventListener("click", async function () {
+            pageScope.listen(button, "click", async function () {
                 const name = button.dataset.channelName || "该通道";
                 if (!await confirmAction({
                     title: "确认删除通道",
@@ -1403,25 +1403,25 @@
         toggleMasterProtocolFields(form);
 
         document.querySelectorAll("[data-master-editor-open]").forEach(function (button) {
-            button.addEventListener("click", function () {
+            pageScope.listen(button, "click", function () {
                 openMasterEditor(button);
             });
         });
 
         if (channelSelect) {
-            channelSelect.addEventListener("change", function () {
+            pageScope.listen(channelSelect, "change", function () {
                 updateMasterChannelWarning(channelWarning, channelSelect);
             });
         }
         [deviceCountInput, startRegisterInput].forEach(function (field) {
             if (field) {
-                field.addEventListener("input", function () {
+                pageScope.listen(field, "input", function () {
                     updateMasterTemplateSummaryAndPreview(form, templateSummary, addressPreview);
                 });
             }
         });
 
-        form.addEventListener("submit", async function (event) {
+        pageScope.listen(form, "submit", async function (event) {
             event.preventDefault();
 
             if (form.dataset.submitting === "true") {
@@ -1716,37 +1716,37 @@
             if (typeof onSelection === "function") onSelection(applyDefaults === true);
         }
 
-        trigger.addEventListener("click", function () { if (panel.hidden) open(); else close(); });
-        search.addEventListener("input", function () { filterOptions(true); });
+        pageScope.listen(trigger, "click", function () { if (panel.hidden) open(); else close(); });
+        pageScope.listen(search, "input", function () { filterOptions(true); });
         panel.querySelectorAll("[data-master-template-filter]").forEach(function (button) {
-            button.addEventListener("click", function () {
+            pageScope.listen(button, "click", function () {
                 activeFilter = button.dataset.masterTemplateFilter || "all";
                 renderActiveFilter();
                 filterOptions(true);
             });
         });
         options.forEach(function (option) {
-            option.addEventListener("click", function () {
+            pageScope.listen(option, "click", function () {
                 if (Date.now() < suppressOptionClickUntil) return;
                 setValue(option.dataset.templateId || "", true);
                 close();
                 trigger.focus();
             });
         });
-        optionsContainer.addEventListener("touchstart", function (event) {
+        pageScope.listen(optionsContainer, "touchstart", function (event) {
             if (!event.touches || !event.touches[0]) return;
             touchStartX = event.touches[0].clientX;
             touchStartY = event.touches[0].clientY;
             touchScrolled = false;
         }, { passive: true });
-        optionsContainer.addEventListener("touchmove", function (event) {
+        pageScope.listen(optionsContainer, "touchmove", function (event) {
             if (!event.touches || !event.touches[0]) return;
             if (Math.abs(event.touches[0].clientX - touchStartX) > 8 ||
                 Math.abs(event.touches[0].clientY - touchStartY) > 8) {
                 touchScrolled = true;
             }
         }, { passive: true });
-        optionsContainer.addEventListener("touchend", function () {
+        pageScope.listen(optionsContainer, "touchend", function () {
             if (touchScrolled) suppressOptionClickUntil = Date.now() + 450;
             touchScrolled = false;
         }, { passive: true });
@@ -1794,7 +1794,7 @@
     // 绑定主站删除按钮。
     function bindMasterDeleteButtons() {
         document.querySelectorAll("[data-master-delete]").forEach(function (button) {
-            button.addEventListener("click", async function () {
+            pageScope.listen(button, "click", async function () {
                 const name = button.dataset.masterName || "该主站";
                 if (!await confirmAction({
                     title: "确认删除主站",
@@ -1830,7 +1830,7 @@
     // 绑定主站编辑弹窗的关闭按钮。
     function initMasterModalCloseButtons(modal) {
         modal.querySelectorAll("[data-master-modal-close]").forEach(function (button) {
-            button.addEventListener("click", function () {
+            pageScope.listen(button, "click", function () {
                 closeModal(modal);
             });
         });

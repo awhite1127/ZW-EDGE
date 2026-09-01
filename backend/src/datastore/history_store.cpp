@@ -100,74 +100,58 @@ std::string record_context(const HistoryRecord& record)
            ", sample_period=" + record.sample_period;
 }
 
-// 格式化本地日期。
+std::tm local_tm_from_time_t(std::time_t value)
+{
+    std::tm result{};
+#if defined(_WIN32)
+    localtime_s(&result, &value);
+#else
+    localtime_r(&value, &result);
+#endif
+    return result;
+}
+
 std::string format_local_date(std::chrono::system_clock::time_point time_point)
 {
     const auto time_value = std::chrono::system_clock::to_time_t(time_point);
-    std::tm local_tm{};
-#if defined(_WIN32)
-    localtime_s(&local_tm, &time_value);
-#else
-    localtime_r(&time_value, &local_tm);
-#endif
-
+    const auto local_tm = local_tm_from_time_t(time_value);
     std::ostringstream stream;
     stream << std::put_time(&local_tm, "%Y-%m-%d");
     return stream.str();
 }
 
-// 将毫秒时间戳转换为本地日期文本。
 std::string date_from_timestamp_ms(TimestampMs timestamp_ms)
 {
-    const auto time_point = std::chrono::system_clock::time_point(std::chrono::milliseconds(timestamp_ms));
-    return format_local_date(time_point);
+    return format_local_date(std::chrono::system_clock::time_point(std::chrono::milliseconds(timestamp_ms)));
 }
 
-// 校验日期文本格式是否合法。
 bool is_valid_date_text(const std::string& value)
 {
-    if (value.size() != 10 || value[4] != '-' || value[7] != '-') {
-        return false;
-    }
+    if (value.size() != 10 || value[4] != '-' || value[7] != '-') return false;
     for (std::size_t index = 0; index < value.size(); ++index) {
-        if (index == 4 || index == 7) {
-            continue;
-        }
-        if (value[index] < '0' || value[index] > '9') {
-            return false;
-        }
+        if (index == 4 || index == 7) continue;
+        if (value[index] < '0' || value[index] > '9') return false;
     }
     return true;
 }
 
-// 规范化采样周期。
 std::string normalize_sample_period(const std::string& value)
 {
-    if (value == "raw_10min" || value == "hour") return value;
-    return "day";
+    return value == "raw_10min" || value == "hour" ? value : "day";
 }
 
-// 判断采样周期是否受支持。
 bool is_valid_sample_period(const std::string& value)
 {
     return value == "raw_10min" || value == "hour" || value == "day";
 }
 
-// 计算指定周期的时间桶起点。
 TimestampMs bucket_start_for_period(TimestampMs timestamp_ms, const std::string& period)
 {
     const auto time_point = std::chrono::system_clock::time_point(std::chrono::milliseconds(timestamp_ms));
-    const auto time_value = std::chrono::system_clock::to_time_t(time_point);
-    std::tm local_tm{};
-#if defined(_WIN32)
-    localtime_s(&local_tm, &time_value);
-#else
-    localtime_r(&time_value, &local_tm);
-#endif
+    auto local_tm = local_tm_from_time_t(std::chrono::system_clock::to_time_t(time_point));
     local_tm.tm_sec = 0;
-    if (period == "raw_10min") {
-        local_tm.tm_min = (local_tm.tm_min / 10) * 10;
-    } else {
+    if (period == "raw_10min") local_tm.tm_min = (local_tm.tm_min / 10) * 10;
+    else {
         local_tm.tm_min = 0;
         if (period == "day") local_tm.tm_hour = 0;
     }
@@ -175,29 +159,20 @@ TimestampMs bucket_start_for_period(TimestampMs timestamp_ms, const std::string&
     return bucket_time < 0 ? 0 : static_cast<TimestampMs>(bucket_time) * 1000ULL;
 }
 
-// 格式化指定周期的时间桶标签。
 std::string bucket_text_for_period(TimestampMs bucket_start_ms, const std::string& period)
 {
     const auto time_point = std::chrono::system_clock::time_point(std::chrono::milliseconds(bucket_start_ms));
-    const auto time_value = std::chrono::system_clock::to_time_t(time_point);
-    std::tm local_tm{};
-#if defined(_WIN32)
-    localtime_s(&local_tm, &time_value);
-#else
-    localtime_r(&time_value, &local_tm);
-#endif
+    const auto local_tm = local_tm_from_time_t(std::chrono::system_clock::to_time_t(time_point));
     std::ostringstream stream;
-    stream << std::put_time(&local_tm, period == "day" ? "%Y-%m-%d" : (period == "hour" ? "%Y-%m-%d %H:00" : "%Y-%m-%d %H:%M"));
+    stream << std::put_time(
+        &local_tm,
+        period == "day" ? "%Y-%m-%d" : (period == "hour" ? "%Y-%m-%d %H:00" : "%Y-%m-%d %H:%M"));
     return stream.str();
 }
 
-// 将导出数量限制约束到安全范围。
 std::uint32_t normalize_export_limit(std::uint32_t value)
 {
-    if (value == 0) {
-        return kDefaultExportLimit;
-    }
-    return std::min(value, kMaxExportLimit);
+    return value == 0 ? kDefaultExportLimit : std::min(value, kMaxExportLimit);
 }
 
 // 确保数据库文件的父目录存在。

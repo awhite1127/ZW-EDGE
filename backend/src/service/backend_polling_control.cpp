@@ -114,17 +114,18 @@ StatusCode BackendService::start_polling_locked(std::string* error_message)
         return StatusCode::kInvalidState;
     }
     if (!has_enabled_collection_target_locked()) {
-        system_status_.polling_running = false;
-        system_status_.polling_state = "stopped";
-        system_status_.last_poll_cycle_started_at_ms = 0;
-        system_status_.last_poll_cycle_finished_at_ms = 0;
-        system_status_.last_poll_cycle_master_count = 0;
-        system_status_.last_poll_cycle_success_master_count = 0;
-        system_status_.last_poll_cycle_failed_master_count = 0;
-        system_status_.last_poll_cycle_success_device_count = 0;
-        system_status_.last_poll_cycle_failed_device_count = 0;
-        system_status_.last_poll_cycle_has_error = false;
-        system_status_.diagnosis = make_diagnosis(
+        auto runtime_status = data_store_.get_system_status();
+        runtime_status.polling_running = false;
+        runtime_status.polling_state = "stopped";
+        runtime_status.last_poll_cycle_started_at_ms = 0;
+        runtime_status.last_poll_cycle_finished_at_ms = 0;
+        runtime_status.last_poll_cycle_master_count = 0;
+        runtime_status.last_poll_cycle_success_master_count = 0;
+        runtime_status.last_poll_cycle_failed_master_count = 0;
+        runtime_status.last_poll_cycle_success_device_count = 0;
+        runtime_status.last_poll_cycle_failed_device_count = 0;
+        runtime_status.last_poll_cycle_has_error = false;
+        runtime_status.diagnosis = make_diagnosis(
             DiagnosisLevel::kSystem,
             "polling",
             "轮询服务",
@@ -133,12 +134,12 @@ StatusCode BackendService::start_polling_locked(std::string* error_message)
             0,
             time_utils::system_now_ms(),
             0);
-        system_status_.last_poll_cycle_error_message.clear();
-        system_status_.last_status_message = "当前无有效启用采集目标，轮询未启动";
-        system_status_.last_heartbeat_ms = time_utils::steady_now_ms();
-        sync_system_status_to_store();
+        runtime_status.last_poll_cycle_error_message.clear();
+        runtime_status.last_status_message = "当前无有效启用采集目标，轮询未启动";
+        runtime_status.last_heartbeat_ms = time_utils::steady_now_ms();
+        data_store_.update_system_status(runtime_status);
         if (error_message != nullptr) {
-            *error_message = system_status_.last_status_message;
+            *error_message = runtime_status.last_status_message;
         }
         return StatusCode::kInvalidState;
     }
@@ -180,11 +181,12 @@ StatusCode BackendService::start_polling_locked(std::string* error_message)
         return status;
     }
 
-    system_status_.polling_running = true;
-    system_status_.polling_state = "running";
-    system_status_.last_status_message = "轮询已启动";
-    system_status_.last_heartbeat_ms = time_utils::steady_now_ms();
-    sync_system_status_to_store();
+    auto runtime_status = data_store_.get_system_status();
+    runtime_status.polling_running = true;
+    runtime_status.polling_state = "running";
+    runtime_status.last_status_message = "轮询已启动";
+    runtime_status.last_heartbeat_ms = time_utils::steady_now_ms();
+    data_store_.update_system_status(runtime_status);
     return StatusCode::kOk;
 }
 
@@ -196,11 +198,12 @@ std::unique_ptr<PollingService> BackendService::detach_polling_service_locked(
     auto polling_service = std::move(polling_service_);
     if (polling_service != nullptr) {
         polling_service->set_device_status_update_callback({});
-        system_status_.polling_running = true;
-        system_status_.polling_state = polling_state;
-        system_status_.last_status_message = status_message;
-        system_status_.last_heartbeat_ms = time_utils::steady_now_ms();
-        sync_system_status_to_store();
+        auto runtime_status = data_store_.get_system_status();
+        runtime_status.polling_running = true;
+        runtime_status.polling_state = polling_state;
+        runtime_status.last_status_message = status_message;
+        runtime_status.last_heartbeat_ms = time_utils::steady_now_ms();
+        data_store_.update_system_status(runtime_status);
     }
     return polling_service;
 }
@@ -232,7 +235,6 @@ void BackendService::merge_stopped_polling_service_locked(
     }
     if (stopped_service != nullptr) {
         const auto polling_error = stopped_service->get_last_error_summary();
-        load_system_status_from_store();
         if (polling_error.has_error) {
             set_last_error(
                 polling_error.source,
@@ -241,11 +243,12 @@ void BackendService::merge_stopped_polling_service_locked(
                 polling_error.timestamp_ms);
         }
     }
-    system_status_.polling_running = false;
-    system_status_.polling_state = polling_state;
-    system_status_.last_status_message = status_message;
-    system_status_.last_heartbeat_ms = time_utils::steady_now_ms();
-    sync_system_status_to_store();
+    auto runtime_status = data_store_.get_system_status();
+    runtime_status.polling_running = false;
+    runtime_status.polling_state = polling_state;
+    runtime_status.last_status_message = status_message;
+    runtime_status.last_heartbeat_ms = time_utils::steady_now_ms();
+    data_store_.update_system_status(runtime_status);
 }
 
 }  // namespace edge_controller

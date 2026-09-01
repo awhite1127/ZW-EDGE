@@ -7,6 +7,7 @@
 
 #include "common/sqlite_compat.h"
 #include "datastore/sqlite_helpers.h"
+#include "model/alarm_validation.h"
 
 namespace edge_controller {
 namespace {
@@ -21,24 +22,6 @@ StatusCode set_error(std::string* output, const std::string& message, StatusCode
 {
     if (output != nullptr) *output = message;
     return code;
-}
-
-// 校验告警规则的必填字段和阈值关系。
-bool valid_rule(const AlarmRule& rule, std::string* error)
-{
-    if (rule.device_id.empty() || rule.point_key.empty()) { set_error(error, "告警规则的 device_id 和 point_key 不能为空", StatusCode::kInvalidArgument); return false; }
-    if (rule.level != "warning" && rule.level != "error") { set_error(error, "告警级别只能是 warning 或 error", StatusCode::kInvalidArgument); return false; }
-    if (!std::isfinite(rule.hysteresis) || rule.hysteresis < 0.0) { set_error(error, "告警回差必须为有限非负数", StatusCode::kInvalidArgument); return false; }
-    if (rule.trigger_count == 0 || rule.recovery_count == 0) { set_error(error, "告警触发和恢复连续次数必须大于 0", StatusCode::kInvalidArgument); return false; }
-    if (rule.enabled && !rule.high_enabled && !rule.low_enabled) { set_error(error, "启用告警规则时至少需要启用上限或下限", StatusCode::kInvalidArgument); return false; }
-    if (rule.high_enabled && !std::isfinite(rule.high_threshold)) { set_error(error, "启用上限时上限阈值必须为有限数", StatusCode::kInvalidArgument); return false; }
-    if (rule.low_enabled && !std::isfinite(rule.low_threshold)) { set_error(error, "启用下限时下限阈值必须为有限数", StatusCode::kInvalidArgument); return false; }
-    if (rule.high_enabled && rule.low_enabled) {
-        const auto threshold_span = rule.high_threshold - rule.low_threshold;
-        if (threshold_span <= 0.0) { set_error(error, "同时启用上下限时，下限必须小于上限", StatusCode::kInvalidArgument); return false; }
-        if (rule.hysteresis >= threshold_span) { set_error(error, "同时启用上下限时，回差必须小于上下限差值", StatusCode::kInvalidArgument); return false; }
-    }
-    return true;
 }
 
 // 校验告警运行状态能否安全持久化。
@@ -158,7 +141,8 @@ StatusCode AlarmStore::initialize_schema_locked(std::string* error)
 // 新增或更新规则。
 StatusCode AlarmStore::upsert_rule(const AlarmRule& r, std::string* error)
 {
-    if (!valid_rule(r,error)) return StatusCode::kInvalidArgument;
+    const auto validation_status = validate_alarm_rule(r, error);
+    if (!is_ok(validation_status)) return validation_status;
     // 未启用的方向仍按 0 入库，避免 NaN/Inf 进入 SQLite 后通过 JSON 暴露给前端。
     const auto stored_high_threshold = std::isfinite(r.high_threshold) ? r.high_threshold : 0.0;
     const auto stored_low_threshold = std::isfinite(r.low_threshold) ? r.low_threshold : 0.0;
@@ -363,7 +347,8 @@ StatusCode AlarmStore::replace_alarm_data_for_import_locked(
     std::string* error)
 {
     for (const auto& rule : rules) {
-        if (!valid_rule(rule, error)) return StatusCode::kInvalidArgument;
+        const auto validation_status = validate_alarm_rule(rule, error);
+        if (!is_ok(validation_status)) return validation_status;
     }
     for (const auto& state : states) {
         if (!valid_runtime_state(state, error)) return StatusCode::kInvalidArgument;

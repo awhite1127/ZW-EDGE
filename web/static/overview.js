@@ -10,7 +10,6 @@
     const formatTimestamp = EdgeApp.formatTimestamp;
     const defaultDisplayText = EdgeApp.defaultDisplayText;
     const isPageHidden = EdgeApp.isPageHidden || function () { return false; };
-    const onPageVisibilityChange = EdgeApp.onPageVisibilityChange || function () { return false; };
     const EdgeMotion = window.EdgeMotion;
     let pageScope = null;
 
@@ -40,7 +39,6 @@
         const initialSnapshotRendered = Boolean(initialSnapshot);
 
         let inFlight = false;
-        let refreshTimer = null;
         const refresh = function () {
             if (isPageHidden() || inFlight) {
                 return;
@@ -77,37 +75,9 @@
                 });
         };
 
-        const stopTimer = function () {
-            if (refreshTimer !== null) {
-                window.clearInterval(refreshTimer);
-                refreshTimer = null;
-            }
-        };
-        const startTimer = function () {
-            stopTimer();
-            if (!isPageHidden()) {
-                refreshTimer = window.setInterval(refresh, 10000);
-            }
-        };
-
         if (!initialSnapshotRendered) refresh();
-        startTimer();
-        scope.onVisibilityChange(function () {
-            if (isPageHidden()) {
-                stopTimer();
-            } else {
-                refresh();
-                startTimer();
-            }
-        });
-        scope.listen(window, "pagehide", stopTimer);
-        scope.listen(window, "pageshow", function (event) {
-            if (event.persisted) {
-                refresh();
-                startTimer();
-            }
-        });
-        scope.onDispose(stopTimer);
+        const polling = new EdgeApp.PollingController(scope, refresh, 10000);
+        polling.start(false);
     }
 
     // 集中缓存快照更新所需节点，避免每轮刷新重复查询 DOM。

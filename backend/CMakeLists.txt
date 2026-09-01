@@ -120,6 +120,7 @@ add_library(edge_controller_core STATIC
     src/manager/channel_manager.cpp
     src/manager/topology_manager.cpp
     src/model/diagnosis_status.cpp
+    src/model/alarm_validation.cpp
     src/model/device_template.cpp
     src/model/builtin_device_templates.cpp
     src/model/builtin_wired_devices.cpp
@@ -306,6 +307,19 @@ if(EDGE_CONTROLLER_BUILD_TESTS)
     )
     set_tests_properties(edge_controller_alarm_evaluator_batch PROPERTIES TIMEOUT 30)
 
+    add_executable(edge_controller_alarm_rule_validation_test
+        tests/alarm_rule_validation_test.cpp
+    )
+    target_compile_features(edge_controller_alarm_rule_validation_test PRIVATE cxx_std_17)
+    target_link_libraries(edge_controller_alarm_rule_validation_test
+        PRIVATE edge_controller_core Threads::Threads
+    )
+    add_test(
+        NAME edge_controller_alarm_rule_validation
+        COMMAND edge_controller_alarm_rule_validation_test
+    )
+    set_tests_properties(edge_controller_alarm_rule_validation PROPERTIES TIMEOUT 30)
+
     add_executable(edge_controller_history_store_test
         tests/history_store_test.cpp
     )
@@ -347,6 +361,7 @@ if(EDGE_CONTROLLER_BUILD_TESTS)
         edge_controller_event_store_query_test
         edge_controller_data_store_realtime_snapshot_test
         edge_controller_alarm_evaluator_batch_test
+        edge_controller_alarm_rule_validation_test
         edge_controller_history_store_test
         edge_controller_bounded_address_resolver_integration_test
     )

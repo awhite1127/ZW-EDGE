@@ -19,10 +19,6 @@ bool handle_collection_request(const IpcHandlerContext& context, std::string* re
     const auto& id_json = context.id_json;
     const auto& method = context.method;
     auto* backend_service_ = context.backend_service;
-    (void)root;
-    (void)id_json;
-    (void)method;
-    (void)backend_service_;
 
     // 通道查询、保存和删除。
     if (method == "list_channels") {
@@ -39,26 +35,14 @@ bool handle_collection_request(const IpcHandlerContext& context, std::string* re
             root,
             &request,
             &request_error);
-        if (!is_ok(request_status)) {
-            *response_json = ipc_protocol::build_error_response(
-                id_json,
-                status_code_string(request_status),
-                request_error.empty() ? "通道配置请求无效" : request_error);
-            return true;
-        }
+        if (respond_if_error(request_status, id_json, request_error.empty() ? "通道配置请求无效" : request_error, response_json)) return true;
 
         ChannelConfigUpdateResult result;
         std::string update_error;
         const auto update_status = method == "create_channel_config"
                                        ? backend_service_->create_channel_config(request, &result, &update_error)
                                        : backend_service_->update_channel_config(request, &result, &update_error);
-        if (!is_ok(update_status)) {
-            *response_json = ipc_protocol::build_error_response(
-                id_json,
-                status_code_string(update_status),
-                update_error.empty() ? "更新通道配置失败" : update_error);
-            return true;
-        }
+        if (respond_if_error(update_status, id_json, update_error.empty() ? "更新通道配置失败" : update_error, response_json)) return true;
 
         *response_json = ipc_protocol::build_success_response(id_json, ipc_json::to_json(result));
             return true;
@@ -74,13 +58,7 @@ bool handle_collection_request(const IpcHandlerContext& context, std::string* re
         ChannelConfigDeleteResult result;
         std::string delete_error;
         const auto delete_status = backend_service_->delete_channel_config(channel_id, &result, &delete_error);
-        if (!is_ok(delete_status)) {
-            *response_json = ipc_protocol::build_error_response(
-                id_json,
-                status_code_string(delete_status),
-                delete_error.empty() ? "删除通道配置失败" : delete_error);
-            return true;
-        }
+        if (respond_if_error(delete_status, id_json, delete_error.empty() ? "删除通道配置失败" : delete_error, response_json)) return true;
 
         *response_json = ipc_protocol::build_success_response(id_json, ipc_json::to_json(result));
             return true;
@@ -94,26 +72,14 @@ bool handle_collection_request(const IpcHandlerContext& context, std::string* re
             root,
             &request,
             &request_error);
-        if (!is_ok(request_status)) {
-            *response_json = ipc_protocol::build_error_response(
-                id_json,
-                status_code_string(request_status),
-                request_error.empty() ? "主控配置请求无效" : request_error);
-            return true;
-        }
+        if (respond_if_error(request_status, id_json, request_error.empty() ? "主控配置请求无效" : request_error, response_json)) return true;
 
         MasterNodeConfigUpdateResult result;
         std::string update_error;
         const auto update_status = method == "create_master_config"
                                        ? backend_service_->create_master_config(request, &result, &update_error)
                                        : backend_service_->update_master_config(request, &result, &update_error);
-        if (!is_ok(update_status)) {
-            *response_json = ipc_protocol::build_error_response(
-                id_json,
-                status_code_string(update_status),
-                update_error.empty() ? "更新主控配置失败" : update_error);
-            return true;
-        }
+        if (respond_if_error(update_status, id_json, update_error.empty() ? "更新主控配置失败" : update_error, response_json)) return true;
 
         *response_json = ipc_protocol::build_success_response(id_json, ipc_json::to_json(result));
             return true;
@@ -129,13 +95,7 @@ bool handle_collection_request(const IpcHandlerContext& context, std::string* re
         MasterNodeConfigDeleteResult result;
         std::string delete_error;
         const auto delete_status = backend_service_->delete_master_config(master_id, &result, &delete_error);
-        if (!is_ok(delete_status)) {
-            *response_json = ipc_protocol::build_error_response(
-                id_json,
-                status_code_string(delete_status),
-                delete_error.empty() ? "删除主控配置失败" : delete_error);
-            return true;
-        }
+        if (respond_if_error(delete_status, id_json, delete_error.empty() ? "删除主控配置失败" : delete_error, response_json)) return true;
 
         *response_json = ipc_protocol::build_success_response(id_json, ipc_json::to_json(result));
             return true;
@@ -146,13 +106,7 @@ bool handle_collection_request(const IpcHandlerContext& context, std::string* re
         std::vector<SerialPortInfo> ports;
         std::string error_message;
         const auto status = backend_service_->list_serial_ports(&ports, &error_message);
-        if (!is_ok(status)) {
-            *response_json = ipc_protocol::build_error_response(
-                id_json,
-                status_code_string(status),
-                error_message.empty() ? "系统串口扫描失败" : error_message);
-            return true;
-        }
+        if (respond_if_error(status, id_json, error_message.empty() ? "系统串口扫描失败" : error_message, response_json)) return true;
         *response_json = ipc_protocol::build_success_response(
             id_json,
             ipc_json::to_json_array(ports));
@@ -190,13 +144,7 @@ bool handle_collection_request(const IpcHandlerContext& context, std::string* re
             (*params)["display_name"].get<std::string>(),
             &updated,
             &update_error);
-        if (!is_ok(status)) {
-            *response_json = ipc_protocol::build_error_response(
-                id_json,
-                status_code_string(status),
-                update_error.empty() ? "设备名称保存失败" : update_error);
-            return true;
-        }
+        if (respond_if_error(status, id_json, update_error.empty() ? "设备名称保存失败" : update_error, response_json)) return true;
         *response_json = ipc_protocol::build_success_response(id_json, ipc_json::to_json(updated));
         return true;
     }
@@ -229,13 +177,7 @@ bool handle_collection_request(const IpcHandlerContext& context, std::string* re
         std::string update_error;
         const auto status = backend_service_->update_device_display_names_batch(
             items, &result, &update_error);
-        if (!is_ok(status)) {
-            *response_json = ipc_protocol::build_error_response(
-                id_json,
-                status_code_string(status),
-                update_error.empty() ? "批量设备名称保存失败" : update_error);
-            return true;
-        }
+        if (respond_if_error(status, id_json, update_error.empty() ? "批量设备名称保存失败" : update_error, response_json)) return true;
         *response_json = ipc_protocol::build_success_response(id_json, ipc_json::to_json(result));
         return true;
     }
@@ -257,13 +199,7 @@ bool handle_collection_request(const IpcHandlerContext& context, std::string* re
             &channel_id,
             &limit,
             &request_error);
-        if (!is_ok(request_status)) {
-            *response_json = ipc_protocol::build_error_response(
-                id_json,
-                status_code_string(request_status),
-                request_error.empty() ? "通讯报文查询请求参数非法" : request_error);
-            return true;
-        }
+        if (respond_if_error(request_status, id_json, request_error.empty() ? "通讯报文查询请求参数非法" : request_error, response_json)) return true;
 
         ChannelCommunicationTraces traces;
         traces.channel_id = channel_id;
@@ -279,13 +215,7 @@ bool handle_collection_request(const IpcHandlerContext& context, std::string* re
             root,
             &channel_id,
             &request_error);
-        if (!is_ok(request_status)) {
-            *response_json = ipc_protocol::build_error_response(
-                id_json,
-                status_code_string(request_status),
-                request_error.empty() ? "通讯报文清空请求参数非法" : request_error);
-            return true;
-        }
+        if (respond_if_error(request_status, id_json, request_error.empty() ? "通讯报文清空请求参数非法" : request_error, response_json)) return true;
 
         backend_service_->clear_channel_communication_traces(channel_id);
         *response_json = ipc_protocol::build_success_response(

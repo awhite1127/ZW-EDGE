@@ -10,7 +10,10 @@
     const readTreeState = EdgeApp.readTreeState;
     const writeTreeState = EdgeApp.writeTreeState;
 
-    function mount() {
+    let pageScope = null;
+
+    function mount(scope) {
+        pageScope = scope;
         initHistoryDeviceTree();
         initHistoryDeviceSelector();
         initHistoryPointSelector();
@@ -42,7 +45,7 @@
             treeStateChanged = true;
         });
         if (treeStateChanged) writeTreeState(storageKey, state);
-        tree.addEventListener("click", function (event) {
+        pageScope.listen(tree, "click", function (event) {
             const toggle = event.target.closest("[data-history-tree-toggle]");
             if (!toggle) return;
             event.preventDefault();
@@ -64,7 +67,7 @@
     function initHistoryDeviceSelector() {
         const selector = document.querySelector("[data-history-device-selector]");
         if (!selector) return;
-        selector.addEventListener("change", function () {
+        pageScope.listen(selector, "change", function () {
             const target = selector.value || "";
             if (target.indexOf("/history?") !== 0 && target !== "/history") return;
             if (EdgeApp.navigate) EdgeApp.navigate(target);
@@ -77,7 +80,7 @@
         const selector = document.querySelector("[data-history-point-selector]");
         const form = selector ? selector.form : null;
         if (!selector || !form) return;
-        selector.addEventListener("change", function () {
+        pageScope.listen(selector, "change", function () {
             const target = new URL(form.action || "/device-history", window.location.href);
             Array.from(form.elements).forEach(function (field) {
                 if (!field.name || field.disabled) return;

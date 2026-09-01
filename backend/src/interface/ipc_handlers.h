@@ -31,6 +31,18 @@ inline std::string status_code_string(StatusCode code)
     return to_string(code);
 }
 
+// 失败时写入统一错误响应；成功时不修改输出。
+inline bool respond_if_error(
+    StatusCode status,
+    const nlohmann::json& id,
+    const std::string& message,
+    std::string* response)
+{
+    if (is_ok(status)) return false;
+    *response = ipc_protocol::build_error_response(id, status_code_string(status), message);
+    return true;
+}
+
 // 按名称查找 JSON 对象字段。
 inline const nlohmann::json* json_field(const nlohmann::json& object, const std::string& field)
 {

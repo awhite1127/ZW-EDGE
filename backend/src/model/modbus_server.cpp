@@ -271,7 +271,7 @@ StatusCode validate_modbus_register_mappings(
                         describe(mapping) + " 的" + (quality ? "质量地址" : "数据地址") + "与已存在映射 " +
                         describe(existing) + " 的" + (previous.quality ? "质量地址" : "数据地址") + "重叠";
                 }
-                return StatusCode::kInvalidArgument;
+                return StatusCode::kConflict;
             }
             owner[address] = AddressOwner{static_cast<std::int32_t>(index), quality};
             return StatusCode::kOk;

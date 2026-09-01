@@ -19,29 +19,19 @@ bool handle_alarms_request(const IpcHandlerContext& context, std::string* respon
     const auto& id_json = context.id_json;
     const auto& method = context.method;
     auto* backend_service_ = context.backend_service;
-    (void)root;
-    (void)id_json;
-    (void)method;
-    (void)backend_service_;
 
     // 报警规则查询与维护。
     if (method == "list_alarm_rules") {
         std::optional<DeviceId> device_id;
         std::string request_error;
         const auto request_status = ipc_protocol::extract_optional_alarm_device_id(root, &device_id, &request_error);
-        if (!is_ok(request_status)) {
-            *response_json = ipc_protocol::build_error_response(id_json, status_code_string(request_status), request_error);
-            return true;
-        }
+        if (respond_if_error(request_status, id_json, request_error, response_json)) return true;
         std::vector<AlarmRule> rules;
         std::string query_error;
         const auto status = device_id.has_value()
                                 ? backend_service_->list_device_alarm_rules(*device_id, &rules, &query_error)
                                 : backend_service_->list_alarm_rules(&rules, &query_error);
-        if (!is_ok(status)) {
-            *response_json = ipc_protocol::build_error_response(id_json, status_code_string(status), query_error);
-            return true;
-        }
+        if (respond_if_error(status, id_json, query_error, response_json)) return true;
         *response_json = ipc_protocol::build_success_response(id_json, ipc_json::to_json_array(rules));
         return true;
     }
@@ -50,18 +40,12 @@ bool handle_alarms_request(const IpcHandlerContext& context, std::string* respon
         AlarmRule request;
         std::string request_error;
         const auto request_status = ipc_protocol::extract_alarm_rule_upsert_request(root, &request, &request_error);
-        if (!is_ok(request_status)) {
-            *response_json = ipc_protocol::build_error_response(id_json, status_code_string(request_status), request_error);
-            return true;
-        }
+        if (respond_if_error(request_status, id_json, request_error, response_json)) return true;
         AlarmRule saved;
         std::string message;
         std::string save_error;
         const auto status = backend_service_->upsert_alarm_rule(request, &saved, &message, &save_error);
-        if (!is_ok(status)) {
-            *response_json = ipc_protocol::build_error_response(id_json, status_code_string(status), save_error);
-            return true;
-        }
+        if (respond_if_error(status, id_json, save_error, response_json)) return true;
         *response_json = ipc_protocol::build_success_response(id_json, nlohmann::json{{"message", message}, {"rule", ipc_json::to_json(saved)}});
         return true;
     }
@@ -71,17 +55,11 @@ bool handle_alarms_request(const IpcHandlerContext& context, std::string* respon
         std::string point_key;
         std::string request_error;
         const auto request_status = ipc_protocol::extract_alarm_rule_key_request(root, &device_id, &point_key, &request_error);
-        if (!is_ok(request_status)) {
-            *response_json = ipc_protocol::build_error_response(id_json, status_code_string(request_status), request_error);
-            return true;
-        }
+        if (respond_if_error(request_status, id_json, request_error, response_json)) return true;
         std::string message;
         std::string delete_error;
         const auto status = backend_service_->delete_alarm_rule(device_id, point_key, &message, &delete_error);
-        if (!is_ok(status)) {
-            *response_json = ipc_protocol::build_error_response(id_json, status_code_string(status), delete_error);
-            return true;
-        }
+        if (respond_if_error(status, id_json, delete_error, response_json)) return true;
         *response_json = ipc_protocol::build_success_response(id_json, nlohmann::json{{"message", message}});
         return true;
     }
@@ -91,10 +69,7 @@ bool handle_alarms_request(const IpcHandlerContext& context, std::string* respon
         std::vector<ActiveAlarmView> alarms;
         std::string query_error;
         const auto status = backend_service_->list_active_alarms(&alarms, &query_error);
-        if (!is_ok(status)) {
-            *response_json = ipc_protocol::build_error_response(id_json, status_code_string(status), query_error);
-            return true;
-        }
+        if (respond_if_error(status, id_json, query_error, response_json)) return true;
         *response_json = ipc_protocol::build_success_response(id_json, ipc_json::to_json_array(alarms));
         return true;
     }
@@ -131,10 +106,7 @@ bool handle_alarms_request(const IpcHandlerContext& context, std::string* respon
         const auto status = backend_service_->acknowledge_active_alarm(
             device_id_json->get<std::string>(), point_key_json->get<std::string>(),
             acknowledged_by_json->get<std::string>(), active_since_ms, &alarm, &message, &acknowledge_error);
-        if (!is_ok(status)) {
-            *response_json = ipc_protocol::build_error_response(id_json, status_code_string(status), acknowledge_error);
-            return true;
-        }
+        if (respond_if_error(status, id_json, acknowledge_error, response_json)) return true;
         *response_json = ipc_protocol::build_success_response(
             id_json, nlohmann::json{{"message", message}, {"alarm", ipc_json::to_json(alarm)}});
         return true;

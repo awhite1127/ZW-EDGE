@@ -3,6 +3,7 @@
     "use strict";
 
     const confirmAction = window.EdgeApp && window.EdgeApp.confirmAction;
+    let pageScope = null;
 
     const roleSummaries = {
         super_admin: {
@@ -91,7 +92,7 @@
             const role = fixedRole || (select ? select.value : "operator");
             renderRolePreview(container, role);
             if (select) {
-                select.addEventListener("change", function () {
+                pageScope.listen(select, "change", function () {
                     renderRolePreview(container, select.value);
                 });
             }
@@ -101,7 +102,7 @@
     // 数据清理不可逆；运维入口页不会加载 history.js，因此在本页单独绑定确认。
     function initHistoryCleanupConfirmation() {
         document.querySelectorAll("[data-history-cleanup-form]").forEach(function (form) {
-            form.addEventListener("submit", async function (event) {
+            pageScope.listen(form, "submit", async function (event) {
                 event.preventDefault();
                 const confirmed = await confirmAction({
                     title: "确认清理超期数据",
@@ -623,6 +624,7 @@
     }
 
     function mount(scope) {
+        pageScope = scope;
         initRolePreviews();
         initHistoryCleanupConfirmation();
         const publicWatchRoot = document.querySelector("[data-application-update][data-public-watch='true']");

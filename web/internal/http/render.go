@@ -180,6 +180,18 @@ func (s *Server) renderPage(w http.ResponseWriter, page string, data interface{}
 func writeResult(w http.ResponseWriter, data interface{}, err error) {
 	if err != nil {
 		status, code, message := backendHTTPError(err)
+		var callError *ipc.CallError
+		if errors.As(err, &callError) && callError != nil {
+			domain := callError.Domain
+			if domain == "" {
+				domain = "backend"
+			}
+			writeAPIError(w, status, model.APIError{
+				Code: code, Domain: domain, Message: userVisibleErrorMessage(callError.Message),
+				Params: callError.Params, Retryable: callError.Retryable,
+			})
+			return
+		}
 		writeError(w, status, code, message)
 		return
 	}
@@ -197,11 +209,10 @@ func backendHTTPError(err error) (int, string, string) {
 
 	code, message = callError.Code, callError.Message
 	switch callError.Code {
-	case "invalid_argument":
+	case "invalid_request", "invalid_argument":
 		status = http.StatusBadRequest
-		if strings.Contains(callError.Message, "冲突") {
-			status = http.StatusConflict
-		}
+	case "conflict":
+		status = http.StatusConflict
 	case "not_found":
 		status = http.StatusNotFound
 	case "invalid_state", "io_error", "timeout", "server_busy":
@@ -215,13 +226,17 @@ func writeSuccess(w http.ResponseWriter, data interface{}) {
 }
 
 func writeError(w http.ResponseWriter, status int, code string, message string) {
-	response := model.APIResponse{
-		Success: false,
-		Error: &model.APIError{
-			Code:    code,
-			Message: userVisibleErrorMessage(message),
-		},
+	writeAPIError(w, status, model.APIError{
+		Code: code, Domain: "web", Message: userVisibleErrorMessage(message),
+		Params: map[string]interface{}{}, Retryable: status >= http.StatusInternalServerError,
+	})
+}
+
+func writeAPIError(w http.ResponseWriter, status int, apiError model.APIError) {
+	if apiError.Params == nil {
+		apiError.Params = map[string]interface{}{}
 	}
+	response := model.APIResponse{Success: false, Error: &apiError}
 	writeJSON(w, status, response)
 }
 

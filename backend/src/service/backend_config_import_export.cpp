@@ -1,8 +1,8 @@
 // 配置包导入导出：version 4 完整携带自定义设备类型和显式设备数量。
-#include "service/backend_service.h"
 #include "model/builtin_device_templates.h"
+#include "model/alarm_validation.h"
+#include "service/backend_service.h"
 
-#include <cmath>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -129,62 +129,25 @@ StatusCode validate_import_alarm_rules(
     std::set<std::string> alarm_keys;
     for (const auto& rule : rules) {
         const auto key = rule.device_id + "\n" + rule.point_key;
-        if (rule.device_id.empty() || rule.point_key.empty() || !alarm_keys.insert(key).second) {
+        if (rule.device_id.empty() || rule.point_key.empty()) {
             if (error_message != nullptr) {
                 *error_message = "告警规则存在空设备、空数据项或重复项";
             }
             return StatusCode::kInvalidArgument;
         }
-        if (rule.level != "warning" && rule.level != "error") {
+        if (!alarm_keys.insert(key).second) {
             if (error_message != nullptr) {
-                *error_message = "告警级别只能是 warning 或 error";
+                *error_message = "告警规则存在空设备、空数据项或重复项";
             }
             return StatusCode::kInvalidArgument;
         }
-        if (!std::isfinite(rule.hysteresis) || rule.hysteresis < 0.0) {
+        std::string rule_error;
+        const auto validation_status = validate_alarm_rule(rule, &rule_error);
+        if (!is_ok(validation_status)) {
             if (error_message != nullptr) {
-                *error_message = "告警回差必须为有限非负数";
+                *error_message = "告警规则校验失败：" + rule_error;
             }
-            return StatusCode::kInvalidArgument;
-        }
-        if (rule.trigger_count == 0 || rule.recovery_count == 0) {
-            if (error_message != nullptr) {
-                *error_message = "告警触发和恢复连续次数必须大于 0";
-            }
-            return StatusCode::kInvalidArgument;
-        }
-        if (rule.enabled && !rule.high_enabled && !rule.low_enabled) {
-            if (error_message != nullptr) {
-                *error_message = "启用告警规则时至少需要启用上限或下限";
-            }
-            return StatusCode::kInvalidArgument;
-        }
-        if (rule.high_enabled && !std::isfinite(rule.high_threshold)) {
-            if (error_message != nullptr) {
-                *error_message = "启用上限时上限阈值必须为有限数";
-            }
-            return StatusCode::kInvalidArgument;
-        }
-        if (rule.low_enabled && !std::isfinite(rule.low_threshold)) {
-            if (error_message != nullptr) {
-                *error_message = "启用下限时下限阈值必须为有限数";
-            }
-            return StatusCode::kInvalidArgument;
-        }
-        if (rule.high_enabled && rule.low_enabled) {
-            const auto threshold_span = rule.high_threshold - rule.low_threshold;
-            if (threshold_span <= 0.0) {
-                if (error_message != nullptr) {
-                    *error_message = "同时启用上下限时，下限必须小于上限";
-                }
-                return StatusCode::kInvalidArgument;
-            }
-            if (rule.hysteresis >= threshold_span) {
-                if (error_message != nullptr) {
-                    *error_message = "同时启用上下限时，回差必须小于上下限差值";
-                }
-                return StatusCode::kInvalidArgument;
-            }
+            return validation_status;
         }
     }
     return StatusCode::kOk;

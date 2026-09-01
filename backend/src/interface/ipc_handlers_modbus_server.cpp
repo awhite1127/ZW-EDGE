@@ -157,16 +157,6 @@ StatusCode parse_mapping(const nlohmann::json& value, ModbusRegisterMapping* map
     return StatusCode::kOk;
 }
 
-// 构造 Modbus 服务接口错误响应。
-void error_response(
-    const nlohmann::json& id,
-    StatusCode status,
-    const std::string& message,
-    std::string* response)
-{
-    *response = ipc_protocol::build_error_response(id, status_code_string(status), message);
-}
-
 }  // namespace
 
 // 分派并处理 Modbus 服务 IPC 请求。
@@ -176,8 +166,8 @@ bool handle_modbus_server_request(const IpcHandlerContext& context, std::string*
         ModbusServerPageSnapshot snapshot;
         std::string error;
         const auto status = context.backend_service->get_modbus_server_page_snapshot(&snapshot, &error);
-        if (!is_ok(status)) error_response(context.id_json, status, error, response);
-        else *response = ipc_protocol::build_success_response(context.id_json, ipc_json::to_json(snapshot));
+        if (respond_if_error(status, context.id_json, error, response)) return true;
+        *response = ipc_protocol::build_success_response(context.id_json, ipc_json::to_json(snapshot));
         return true;
     }
     if (context.method == "get_modbus_server_runtime_status") {
@@ -189,16 +179,16 @@ bool handle_modbus_server_request(const IpcHandlerContext& context, std::string*
         std::vector<ModbusExportablePoint> points;
         std::string error;
         const auto status = context.backend_service->list_modbus_exportable_points(&points, &error);
-        if (!is_ok(status)) error_response(context.id_json, status, error, response);
-        else *response = ipc_protocol::build_success_response(context.id_json, ipc_json::to_json_array(points));
+        if (respond_if_error(status, context.id_json, error, response)) return true;
+        *response = ipc_protocol::build_success_response(context.id_json, ipc_json::to_json_array(points));
         return true;
     }
     if (context.method == "list_modbus_register_mappings") {
         std::vector<ModbusRegisterMapping> mappings;
         std::string error;
         const auto status = context.backend_service->list_modbus_register_mappings(&mappings, &error);
-        if (!is_ok(status)) error_response(context.id_json, status, error, response);
-        else *response = ipc_protocol::build_success_response(context.id_json, ipc_json::to_json_array(mappings));
+        if (respond_if_error(status, context.id_json, error, response)) return true;
+        *response = ipc_protocol::build_success_response(context.id_json, ipc_json::to_json_array(mappings));
         return true;
     }
     if (context.method == "update_modbus_server_settings") {
@@ -208,8 +198,8 @@ bool handle_modbus_server_request(const IpcHandlerContext& context, std::string*
         ModbusServerSettings settings;
         if (is_ok(status)) status = parse_settings(*params, &settings, &error);
         if (is_ok(status)) status = context.backend_service->apply_modbus_server_settings(settings, &error);
-        if (!is_ok(status)) error_response(context.id_json, status, error, response);
-        else *response = ipc_protocol::build_success_response(context.id_json, ipc_json::to_json(settings));
+        if (respond_if_error(status, context.id_json, error, response)) return true;
+        *response = ipc_protocol::build_success_response(context.id_json, ipc_json::to_json(settings));
         return true;
     }
     if (context.method == "create_modbus_register_mapping" ||
@@ -228,8 +218,8 @@ bool handle_modbus_server_request(const IpcHandlerContext& context, std::string*
             if (is_ok(status)) status = context.backend_service->update_modbus_register_mapping(
                 mapping_id, request, &result, &error);
         }
-        if (!is_ok(status)) error_response(context.id_json, status, error, response);
-        else *response = ipc_protocol::build_success_response(context.id_json, ipc_json::to_json(result));
+        if (respond_if_error(status, context.id_json, error, response)) return true;
+        *response = ipc_protocol::build_success_response(context.id_json, ipc_json::to_json(result));
         return true;
     }
     if (context.method == "delete_modbus_register_mapping") {
@@ -238,8 +228,8 @@ bool handle_modbus_server_request(const IpcHandlerContext& context, std::string*
         auto status = require_object_params(context.root, &params, &error);
         if (is_ok(status)) status = require_string(*params, "mapping_id", &mapping_id, &error);
         if (is_ok(status)) status = context.backend_service->delete_modbus_register_mapping(mapping_id, &error);
-        if (!is_ok(status)) error_response(context.id_json, status, error, response);
-        else *response = ipc_protocol::build_success_response(context.id_json, nlohmann::json{{"deleted", true}});
+        if (respond_if_error(status, context.id_json, error, response)) return true;
+        *response = ipc_protocol::build_success_response(context.id_json, nlohmann::json{{"deleted", true}});
         return true;
     }
     return false;

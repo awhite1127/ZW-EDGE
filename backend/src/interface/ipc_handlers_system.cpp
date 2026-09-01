@@ -22,13 +22,7 @@ bool build_update_response(
     const std::string& fallback_error,
     std::string* response_json)
 {
-    if (!is_ok(status)) {
-        *response_json = ipc_protocol::build_error_response(
-            id_json,
-            status_code_string(status),
-            error_message.empty() ? fallback_error : error_message);
-        return true;
-    }
+    if (respond_if_error(status, id_json, error_message.empty() ? fallback_error : error_message, response_json)) return true;
     try {
         *response_json = ipc_protocol::build_success_response(
             id_json,
@@ -51,10 +45,6 @@ bool handle_system_request(const IpcHandlerContext& context, std::string* respon
     const auto& id_json = context.id_json;
     const auto& method = context.method;
     auto* backend_service_ = context.backend_service;
-    (void)root;
-    (void)id_json;
-    (void)method;
-    (void)backend_service_;
 
     // init/status 使用的轻量 RPC；只有完成 UDS 帧解析、worker 调度和响应写回才算就绪。
     if (method == "health_check") {
@@ -150,13 +140,7 @@ bool handle_system_request(const IpcHandlerContext& context, std::string* respon
         OverviewPageSnapshot snapshot;
         std::string error_message;
         const auto status = backend_service_->get_overview_page_snapshot(&snapshot, &error_message);
-        if (!is_ok(status)) {
-            *response_json = ipc_protocol::build_error_response(
-                id_json,
-                status_code_string(status),
-                error_message.empty() ? "系统概览首屏快照获取失败" : error_message);
-            return true;
-        }
+        if (respond_if_error(status, id_json, error_message.empty() ? "系统概览首屏快照获取失败" : error_message, response_json)) return true;
         *response_json = ipc_protocol::build_success_response(id_json, ipc_json::to_json(snapshot));
         return true;
     }

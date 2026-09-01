@@ -57,8 +57,11 @@ type IPCRequest struct {
 
 // IPCError 描述后端 IPC 层返回的错误。
 type IPCError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code      string                 `json:"code"`
+	Domain    string                 `json:"domain"`
+	Message   string                 `json:"message"`
+	Params    map[string]interface{} `json:"params"`
+	Retryable bool                   `json:"retryable"`
 }
 
 // IPCResponse 对应后端 IPC 的统一响应结构。
@@ -71,8 +74,11 @@ type IPCResponse struct {
 
 // APIError 描述 Web 返回给浏览器的统一错误结构。
 type APIError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code      string                 `json:"code"`
+	Domain    string                 `json:"domain"`
+	Message   string                 `json:"message"`
+	Params    map[string]interface{} `json:"params"`
+	Retryable bool                   `json:"retryable"`
 }
 
 // APIResponse 是 Web HTTP API 的统一返回格式。

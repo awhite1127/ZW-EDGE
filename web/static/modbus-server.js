@@ -214,12 +214,12 @@
                 edit.type = "button"; edit.className = "btn btn-secondary btn-small"; edit.textContent = "编辑";
                 edit.setAttribute("aria-haspopup", "dialog");
                 edit.setAttribute("aria-controls", "modbus-mapping-modal");
-                edit.addEventListener("click", function () { openMappingEditor(mapping); });
+                scope.listen(edit, "click", function () { openMappingEditor(mapping); });
                 const remove = document.createElement("button");
                 remove.type = "button"; remove.className = "btn btn-danger btn-small"; remove.textContent = "删除";
                 remove.setAttribute("aria-haspopup", "dialog");
                 remove.setAttribute("aria-controls", "modbus-delete-modal");
-                remove.addEventListener("click", function () { openDelete(mapping); });
+                scope.listen(remove, "click", function () { openDelete(mapping); });
                 actions.append(edit, remove);
             } else actions.textContent = "只读";
             body.appendChild(row);
@@ -257,7 +257,7 @@
     // 启动定时器。
     function startTimer() {
         stopTimer();
-        if (!isPageHidden()) timer = window.setInterval(refreshRuntime, 4000);
+        if (!isPageHidden()) timer = scope.setInterval(refreshRuntime, 4000);
     }
     // 停止定时器。
     function stopTimer() { if (timer) window.clearInterval(timer); timer = null; }
@@ -309,8 +309,8 @@
     function integerValue(form, name) { return Number.parseInt(form.elements[name].value, 10); }
 
     if (settingsForm && canManageServer) {
-        settingsForm.elements.enabled.addEventListener("change", renderEnabledToggle);
-        settingsForm.addEventListener("submit", async function (event) {
+        scope.listen(settingsForm.elements.enabled, "change", renderEnabledToggle);
+        scope.listen(settingsForm, "submit", async function (event) {
             event.preventDefault();
             const button = settingsForm.querySelector("[data-settings-submit]");
             if (button.disabled) return;
@@ -534,14 +534,14 @@
     }
 
     if (mappingForm) {
-        mappingForm.elements.device_id.addEventListener("change", function () { fillPointOptions("", ""); updateAddressPreview(); });
-        mappingForm.elements.point_key.addEventListener("change", renderPointDetail);
+        scope.listen(mappingForm.elements.device_id, "change", function () { fillPointOptions("", ""); updateAddressPreview(); });
+        scope.listen(mappingForm.elements.point_key, "change", renderPointDetail);
         ["data_type", "start_address", "quality_address", "value_multiplier", "value_offset", "byte_order", "word_order"].forEach(function (name) {
-            mappingForm.elements[name].addEventListener("input", updateAddressPreview);
-            mappingForm.elements[name].addEventListener("change", updateAddressPreview);
+            scope.listen(mappingForm.elements[name], "input", updateAddressPreview);
+            scope.listen(mappingForm.elements[name], "change", updateAddressPreview);
         });
-        mappingForm.elements.enabled.addEventListener("change", renderMappingEnabledToggle);
-        mappingForm.addEventListener("submit", async function (event) {
+        scope.listen(mappingForm.elements.enabled, "change", renderMappingEnabledToggle);
+        scope.listen(mappingForm, "submit", async function (event) {
             event.preventDefault();
             const request = mappingRequest();
             const conflict = currentConflict(request.start_address, typeCount(request.data_type), request.quality_address);
@@ -575,7 +575,7 @@
     }
 
     const deleteConfirm = root.querySelector("[data-delete-confirm]");
-    if (deleteConfirm) deleteConfirm.addEventListener("click", async function () {
+    if (deleteConfirm) scope.listen(deleteConfirm, "click", async function () {
         if (!deletingMapping || deleteConfirm.disabled) return;
         deleteConfirm.disabled = true; deleteConfirm.textContent = "正在删除…";
         try {
@@ -587,19 +587,19 @@
     });
 
     const createButton = root.querySelector("[data-mapping-create]");
-    if (createButton) createButton.addEventListener("click", function () { openMappingEditor(null); });
+    if (createButton) scope.listen(createButton, "click", function () { openMappingEditor(null); });
     const recommendButton = root.querySelector("[data-address-recommend]");
-    if (recommendButton) recommendButton.addEventListener("click", recommendAddress);
+    if (recommendButton) scope.listen(recommendButton, "click", recommendAddress);
     const refreshButton = document.querySelector("[data-modbus-refresh]");
-    if (refreshButton) refreshButton.addEventListener("click", async function () {
+    if (refreshButton) scope.listen(refreshButton, "click", async function () {
         refreshButton.disabled = true;
         await fullRefresh(true);
         refreshButton.disabled = false;
     });
 
     tabButtons.forEach(function (button, index) {
-        button.addEventListener("click", function () { selectTab(button.dataset.modbusTab); });
-        button.addEventListener("keydown", function (event) {
+        scope.listen(button, "click", function () { selectTab(button.dataset.modbusTab); });
+        scope.listen(button, "keydown", function (event) {
             let nextIndex = index;
             if (event.key === "ArrowRight") nextIndex = (index + 1) % tabButtons.length;
             else if (event.key === "ArrowLeft") nextIndex = (index - 1 + tabButtons.length) % tabButtons.length;

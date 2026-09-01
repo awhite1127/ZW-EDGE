@@ -12,7 +12,6 @@
     const readFieldValue = EdgeApp.readFieldValue;
     const setFeedback = EdgeApp.setFeedback;
     const isPageHidden = EdgeApp.isPageHidden || function () { return false; };
-    const onPageVisibilityChange = EdgeApp.onPageVisibilityChange || function () { return false; };
     const confirmAction = EdgeApp.confirmAction;
     let settingsRuntimeRefreshPaused = false;
     let pageScope = null;
@@ -46,28 +45,11 @@
         }
         const endpoint = root.dataset.settingsRuntimeUrl || "/api/settings/runtime-status";
         let inFlight = false;
-        let timer = null;
-
-        const stopTimer = function () {
-            if (timer !== null) {
-                window.clearTimeout(timer);
-                timer = null;
-            }
-        };
-        const schedule = function () {
-            stopTimer();
-            if (!isPageHidden()) {
-                timer = window.setTimeout(refresh, 5000);
-            }
-        };
-
         const refresh = async function () {
-            timer = null;
             if (isPageHidden()) {
                 return;
             }
             if (inFlight || settingsRuntimeRefreshPaused) {
-                schedule();
                 return;
             }
             inFlight = true;
@@ -89,23 +71,15 @@
                 markSettingsRuntimeUnavailable();
             } finally {
                 inFlight = false;
-                if (scope.isActive()) schedule();
             }
         };
 
-        scope.onVisibilityChange(function () {
-            if (isPageHidden()) {
-                stopTimer();
-            } else {
-                refresh();
-            }
-        });
-        scope.listen(window, "pagehide", stopTimer);
-        scope.listen(window, "pageshow", function (event) {
-            if (event.persisted) refresh();
-        });
-        scope.onDispose(stopTimer);
-        schedule();
+        if (typeof EdgeApp.PollingController === "function") {
+            const polling = new EdgeApp.PollingController(scope, refresh, 5000);
+            polling.start(false);
+        } else {
+            scope.setInterval(refresh, 5000);
+        }
     }
 
     // 使用最新快照更新设置页运行状态。
@@ -160,6 +134,7 @@
 
     // 自动校时与手动校时互斥；界面禁用只用于引导，后端仍负责权限和状态校验。
     function initTimeSettingsControls() {
+        const scope = pageScope;
         // 跟踪设置表单是否有未保存修改，并联动时间模式控件。
         const timeForm = document.querySelector("[data-time-settings-form]");
         const syncForm = document.querySelector("[data-time-sync-form]");
@@ -167,21 +142,21 @@
         const manualForm = document.querySelector("[data-manual-time-form]");
         if (timeForm) {
             timeForm.dataset.dirty = "false";
-            timeForm.addEventListener("input", function () {
+            scope.listen(timeForm, "input", function () {
                 timeForm.dataset.dirty = "true";
                 updateTimeModeFields();
             });
-            timeForm.addEventListener("change", function () {
+            scope.listen(timeForm, "change", function () {
                 timeForm.dataset.dirty = "true";
                 updateTimeModeFields();
             });
         }
-        modeInputs.forEach(function (input) { input.addEventListener("change", updateTimeModeFields); });
+        modeInputs.forEach(function (input) { scope.listen(input, "change", updateTimeModeFields); });
         updateTimeModeFields();
         // 绑定立即执行的 NTP 同步操作。
         if (syncForm) {
             const syncButton = syncForm.querySelector("[data-time-sync-button]");
-            syncForm.addEventListener("submit", function (event) {
+            scope.listen(syncForm, "submit", function (event) {
                 if (syncForm.dataset.busy === "true") {
                     event.preventDefault();
                     return;
@@ -199,7 +174,7 @@
         const browserButton = manualForm.querySelector("[data-browser-time-sync]");
         const manualButton = manualForm.querySelector("[data-manual-time-submit]");
         if (browserButton) {
-            browserButton.addEventListener("click", function () {
+            scope.listen(browserButton, "click", function () {
                 if (manualForm.dataset.busy === "true") return;
                 epochInput.value = String(Date.now());
                 if (sourceInput) sourceInput.value = "browser";
@@ -212,13 +187,13 @@
             });
         }
         if (manualButton) {
-            manualButton.addEventListener("click", function () {
+            scope.listen(manualButton, "click", function () {
                 if (sourceInput) sourceInput.value = "manual";
                 epochInput.value = "";
             });
         }
         // 手动输入需结合所选时区转换为时间戳后再提交。
-        manualForm.addEventListener("submit", function (event) {
+        scope.listen(manualForm, "submit", function (event) {
             if (manualForm.dataset.busy === "true") {
                 event.preventDefault();
                 return;
@@ -248,7 +223,8 @@
 
     // 显示反馈后提交时间设置表单。
     function submitTimeFormAfterFeedback(form) {
-        window.setTimeout(function () {
+        const scope = pageScope;
+        scope.setTimeout(function () {
             HTMLFormElement.prototype.submit.call(form);
         }, 0);
     }
@@ -378,11 +354,12 @@
 
     // TLS 提示只解释证书路径组合，不读取或上传任何证书与私钥内容。
     function initMqttTlsHint() {
+        const scope = pageScope;
         const checkbox = document.querySelector('.mqtt-settings-form input[name="tls_enabled"]');
         if (!checkbox) {
             return;
         }
-        checkbox.addEventListener("change", function () {
+        scope.listen(checkbox, "change", function () {
             if (!checkbox.checked) {
                 return;
             }
@@ -555,6 +532,7 @@
 
     // 网络切换可能立即断开当前页面，因此成功提示同时给出新的候选访问地址。
     function initNetworkSaveApplyActions() {
+        const scope = pageScope;
         document.querySelectorAll("[data-network-save-apply-form]").forEach(function (form) {
             // 初始化模式联动和按钮原始状态。
             const feedback = form.querySelector("[data-network-save-apply-feedback]");
@@ -563,13 +541,13 @@
             const modeSelect = form.querySelector("[data-network-mode]");
 
             if (modeSelect) {
-                modeSelect.addEventListener("change", function () {
+                scope.listen(modeSelect, "change", function () {
                     updateNetworkModeFields(form);
                 });
             }
             updateNetworkModeFields(form);
 
-            form.addEventListener("submit", async function (event) {
+            scope.listen(form, "submit", async function (event) {
                 event.preventDefault();
                 setFeedback(feedback, "", "");
 

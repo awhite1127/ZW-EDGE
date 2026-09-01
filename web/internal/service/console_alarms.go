@@ -8,7 +8,6 @@ import (
 	"edge-web/internal/model"
 	"errors"
 	"fmt"
-	"math"
 	"sort"
 	"strings"
 )
@@ -310,7 +309,8 @@ func normalizedAlarmCount(value uint32) uint32 {
 func (s *ConsoleService) SaveMasterAlarmRule(ctx context.Context, request model.MasterAlarmRuleRequest) model.ActionFeedback {
 	request.MasterID = strings.TrimSpace(request.MasterID)
 	request.PointKey = strings.TrimSpace(request.PointKey)
-	request.Level = normalizeAlarmLevel(request.Level)
+	// Web 只规范化表单文本；告警级别和阈值关系由后端领域 validator 决定。
+	request.Level = strings.ToLower(strings.TrimSpace(request.Level))
 	if message := validateMasterAlarmRuleRequest(request); message != "" {
 		return model.ActionFeedback{Success: false, Message: message}
 	}
@@ -485,58 +485,14 @@ func (s *ConsoleService) masterExistingRules(ctx context.Context, masterID strin
 	return result, nil
 }
 
-// validateMasterAlarmRuleRequest 校验主站告警规则请求。
+// validateMasterAlarmRuleRequest 只校验 Web 交互所需的主站和数据项选择。
+// 告警级别、阈值关系、回差和连续次数属于领域规则，不在 Web 层复制。
 func validateMasterAlarmRuleRequest(request model.MasterAlarmRuleRequest) string {
 	if strings.TrimSpace(request.MasterID) == "" {
 		return "请选择主站"
 	}
 	if strings.TrimSpace(request.PointKey) == "" {
 		return "请选择数据项"
-	}
-	return validateAlarmRuleParameters(model.AlarmRule{
-		PointKey:      request.PointKey,
-		Enabled:       request.Enabled,
-		HighEnabled:   request.HighEnabled,
-		HighThreshold: request.HighThreshold,
-		LowEnabled:    request.LowEnabled,
-		LowThreshold:  request.LowThreshold,
-		Level:         request.Level,
-		Hysteresis:    request.Hysteresis,
-		TriggerCount:  request.TriggerCount,
-		RecoveryCount: request.RecoveryCount,
-	})
-}
-
-// validateAlarmRuleParameters 校验告警规则参数。
-func validateAlarmRuleParameters(rule model.AlarmRule) string {
-	if rule.Level != "warning" && rule.Level != "error" {
-		return "告警级别无效"
-	}
-	if rule.TriggerCount < 1 || rule.TriggerCount > 100 {
-		return "连续触发次数必须在 1～100 之间"
-	}
-	if rule.RecoveryCount < 1 || rule.RecoveryCount > 100 {
-		return "连续恢复次数必须在 1～100 之间"
-	}
-	if math.IsNaN(rule.Hysteresis) || math.IsInf(rule.Hysteresis, 0) || rule.Hysteresis < 0 {
-		return "回差不能为负数"
-	}
-	if rule.Enabled && !rule.HighEnabled && !rule.LowEnabled {
-		return "启用规则时至少需要启用上限或下限"
-	}
-	if rule.HighEnabled && (math.IsNaN(rule.HighThreshold) || math.IsInf(rule.HighThreshold, 0)) {
-		return "上限值必须是有效数字"
-	}
-	if rule.LowEnabled && (math.IsNaN(rule.LowThreshold) || math.IsInf(rule.LowThreshold, 0)) {
-		return "下限值必须是有效数字"
-	}
-	if rule.HighEnabled && rule.LowEnabled {
-		if rule.LowThreshold >= rule.HighThreshold {
-			return "同时启用上下限时，下限必须小于上限"
-		}
-		if rule.Hysteresis >= rule.HighThreshold-rule.LowThreshold {
-			return "同时启用上下限时，回差必须小于上下限差值"
-		}
 	}
 	return ""
 }

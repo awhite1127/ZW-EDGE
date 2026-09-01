@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -45,8 +46,11 @@ var slowCallLogs = struct {
 
 // CallError 表示后端已正常返回，但业务结果为失败。
 type CallError struct {
-	Code    string
-	Message string
+	Code      string
+	Domain    string
+	Message   string
+	Params    map[string]interface{}
+	Retryable bool
 }
 
 // Error 判断或转换当前错误信息。
@@ -139,7 +143,7 @@ func (c *Client) call(ctx context.Context, method string, params interface{}, re
 	defer stopCancellationWakeup()
 
 	if err := writeFrame(conn, payload); err != nil {
-		if contextErr := overallCtx.Err(); contextErr != nil {
+		if contextErr := operationContextError(overallCtx, err); contextErr != nil {
 			return fmt.Errorf("写入后端 IPC 已取消或超时: %w", contextErr)
 		}
 		return err
@@ -147,13 +151,26 @@ func (c *Client) call(ctx context.Context, method string, params interface{}, re
 
 	responsePayload, err := readFrame(conn)
 	if err != nil {
-		if contextErr := overallCtx.Err(); contextErr != nil {
+		if contextErr := operationContextError(overallCtx, err); contextErr != nil {
 			return fmt.Errorf("读取后端 IPC 已取消或超时: %w", contextErr)
 		}
 		return err
 	}
 
 	return decodeResponse(request.ID, responsePayload, result)
+}
+
+// operationContextError 收敛 context 定时器与 socket deadline 同时触发时的竞态。
+// 连接 deadline 由 overallCtx 唯一设置，因此超时型网络错误可稳定归类为调用超时。
+func operationContextError(ctx context.Context, operationErr error) error {
+	if contextErr := ctx.Err(); contextErr != nil {
+		return contextErr
+	}
+	var timeoutError interface{ Timeout() bool }
+	if errors.As(operationErr, &timeoutError) && timeoutError.Timeout() {
+		return context.DeadlineExceeded
+	}
+	return nil
 }
 
 // decodeResponse 校验一次请求/响应的关联关系和统一结果契约。
@@ -168,7 +185,7 @@ func decodeResponse(requestID string, responsePayload []byte, result interface{}
 		// 后端在固定 worker 全部占满时会在读取请求帧之前拒绝连接，因此无法回显
 		// 请求 ID。该连接级错误是唯一允许缺少 ID 的响应；其他响应仍严格关联。
 		if !response.Success && response.Error != nil && response.Error.Code == "server_busy" {
-			return &CallError{Code: response.Error.Code, Message: response.Error.Message}
+			return callErrorFromResponse(response.Error)
 		}
 		return fmt.Errorf("IPC 响应缺少有效请求 ID")
 	}
@@ -180,7 +197,7 @@ func decodeResponse(requestID string, responsePayload []byte, result interface{}
 		if response.Error == nil {
 			return &CallError{Code: "ipc_error", Message: "后端返回失败，但没有附带错误详情"}
 		}
-		return &CallError{Code: response.Error.Code, Message: response.Error.Message}
+		return callErrorFromResponse(response.Error)
 	}
 
 	if result == nil {
@@ -193,6 +210,20 @@ func decodeResponse(requestID string, responsePayload []byte, result interface{}
 		return fmt.Errorf("解析业务结果失败: %w", err)
 	}
 	return nil
+}
+
+func callErrorFromResponse(responseError *model.IPCError) *CallError {
+	if responseError == nil {
+		return nil
+	}
+	params := responseError.Params
+	if params == nil {
+		params = map[string]interface{}{}
+	}
+	return &CallError{
+		Code: responseError.Code, Domain: responseError.Domain, Message: responseError.Message,
+		Params: params, Retryable: responseError.Retryable,
+	}
 }
 
 // logSlowCall 记录超过阈值的 IPC 慢调用。

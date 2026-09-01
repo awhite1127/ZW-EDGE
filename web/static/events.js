@@ -9,7 +9,6 @@
     const showToast = EdgeApp.showToast;
     const confirmAction = EdgeApp.confirmAction;
     const isPageHidden = EdgeApp.isPageHidden || function () { return false; };
-    const onPageVisibilityChange = EdgeApp.onPageVisibilityChange || function () { return false; };
     let pageScope = null;
 
     // mutation 也必须归属当前页面 scope，软导航会中止请求并阻断旧页副作用。
@@ -32,7 +31,7 @@
     // 清空历史事件需要显式确认，且不改变当前活动告警运行态。
     function initEventActions() {
         document.querySelectorAll("[data-clear-events-form]").forEach(function (form) {
-            form.addEventListener("submit", async function (event) {
+            pageScope.listen(form, "submit", async function (event) {
                 event.preventDefault();
                 const confirmed = await confirmAction({
                     title: "确认清除历史事件",
@@ -62,7 +61,7 @@
         const liveStats = root.querySelector("[data-alarm-live-stats]");
         const liveCurrent = root.querySelector("[data-alarm-live-current]");
         let alarmRefreshPromise = null;
-        let alarmRefreshTimer = null;
+        let alarmRefreshController = null;
         let modalReturnFocus = null;
 
         function alarmItemKey(item) {
@@ -202,39 +201,17 @@
             return alarmRefreshPromise;
         }
 
-        if (liveStats && liveCurrent) {
-            const stopAlarmRefreshTimer = function () {
-                if (alarmRefreshTimer !== null) {
-                    window.clearInterval(alarmRefreshTimer);
-                    alarmRefreshTimer = null;
-                }
-            };
-            const startAlarmRefreshTimer = function () {
-                stopAlarmRefreshTimer();
-                if (!isPageHidden()) {
-                    alarmRefreshTimer = window.setInterval(refreshAlarmManagement, 10000);
-                }
-            };
-            startAlarmRefreshTimer();
-            scope.onVisibilityChange(function () {
-                if (isPageHidden()) {
-                    stopAlarmRefreshTimer();
-                } else {
-                    refreshAlarmManagement(false);
-                    startAlarmRefreshTimer();
-                }
-            });
-            scope.listen(window, "pagehide", stopAlarmRefreshTimer);
-            scope.listen(window, "pageshow", function (event) {
-                if (event.persisted) {
-                    refreshAlarmManagement(false);
-                    startAlarmRefreshTimer();
-                }
-            });
-            scope.onDispose(stopAlarmRefreshTimer);
+        if (liveStats && liveCurrent && typeof EdgeApp.PollingController === "function") {
+            alarmRefreshController = new EdgeApp.PollingController(
+                scope,
+                function () { return refreshAlarmManagement(false); },
+                10000
+            );
+            alarmRefreshController.start(false);
+            scope.listen(window, "pagehide", function () { alarmRefreshController.stop(); });
         }
 
-        root.addEventListener("click", async function (event) {
+        scope.listen(root, "click", async function (event) {
             const button = event.target.closest("[data-alarm-acknowledge]");
             if (!button || !root.contains(button)) return;
             button.disabled = true;
@@ -423,7 +400,7 @@
         }
 
         if (masterSelect) {
-            masterSelect.addEventListener("change", function () {
+            scope.listen(masterSelect, "change", function () {
                 updatePointOptions("");
             });
             if (!masterSelect.value && masterSelect.options.length > 0) {
@@ -433,16 +410,16 @@
         }
 
         root.querySelectorAll("[data-alarm-edit]").forEach(function (button) {
-            button.addEventListener("click", function () {
+            scope.listen(button, "click", function () {
                 openAlarmModal(button);
             });
         });
 
         root.querySelectorAll("[data-alarm-modal-close]").forEach(function (button) {
-            button.addEventListener("click", closeAlarmModal);
+            scope.listen(button, "click", closeAlarmModal);
         });
         if (modal) {
-            modal.addEventListener("click", function (event) {
+            scope.listen(modal, "click", function (event) {
                 if (event.target === modal) {
                     closeAlarmModal();
                 }
@@ -472,9 +449,9 @@
 
         if (form) {
             form.querySelectorAll("input[name='limit_type']").forEach(function (input) {
-                input.addEventListener("change", applyLimitType);
+                scope.listen(input, "change", applyLimitType);
             });
-            form.addEventListener("submit", async function (event) {
+            scope.listen(form, "submit", async function (event) {
                 applyLimitType();
                 const message = validateAlarmRuleForm(form);
                 if (message) {

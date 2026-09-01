@@ -82,7 +82,7 @@ func TestDecodeResponseContract(t *testing.T) {
 		{name: "mismatched id", payload: `{"id":"8","success":true,"result":{}}`, want: "ID 不匹配"},
 		{name: "missing id", payload: `{"success":true,"result":{}}`, want: "缺少有效请求 ID"},
 		{name: "missing result", payload: `{"id":"7","success":true}`, want: "缺少业务结果"},
-		{name: "business error", payload: `{"id":"7","success":false,"error":{"code":"bad","message":"failed"}}`, want: "bad: failed"},
+		{name: "business error", payload: `{"id":"7","success":false,"error":{"code":"bad","domain":"service","message":"failed","params":{"operation":"save"},"retryable":true}}`, want: "bad: failed"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -101,6 +101,15 @@ func TestDecodeResponseContract(t *testing.T) {
 	var callError *CallError
 	if !errors.As(err, &callError) || callError.Code != "server_busy" {
 		t.Fatalf("server busy error = %#v", err)
+	}
+
+	err = decodeResponse(
+		"7",
+		[]byte(`{"id":"7","success":false,"error":{"code":"timeout","domain":"transport","message":"timed out","params":{"operation":"poll"},"retryable":true}}`),
+		nil,
+	)
+	if !errors.As(err, &callError) || callError.Domain != "transport" || !callError.Retryable || callError.Params["operation"] != "poll" {
+		t.Fatalf("structured call error = %#v", err)
 	}
 }
 

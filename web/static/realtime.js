@@ -13,7 +13,6 @@
     const escapeHtml = EdgeApp.escapeHtml;
     const dataItemDisplayName = EdgeApp.dataItemDisplayName;
     const isPageHidden = EdgeApp.isPageHidden || function () { return false; };
-    const onPageVisibilityChange = EdgeApp.onPageVisibilityChange || function () { return false; };
     const EdgeMotion = window.EdgeMotion;
     let pageScope = null;
 
@@ -1040,7 +1039,7 @@
         // 告警设备较多时才启动轮播，隐藏页或无告警时及时释放定时器。
         function startAlarmCarousel() {
             if (alarmCarouselTimer || reduceAlarmMotion || isPageHidden() || currentAlarmDeviceNames.length <= 3) return;
-            alarmCarouselTimer = window.setInterval(function () {
+            alarmCarouselTimer = scope.setInterval(function () {
                 if (isPageHidden() || currentAlarmDeviceNames.length <= 3) return;
                 const groupCount = Math.ceil(currentAlarmDeviceNames.length / 3);
                 alarmCarouselIndex = (alarmCarouselIndex + 1) % groupCount;
@@ -1294,7 +1293,7 @@
             function scheduleStart(delay) {
                 clearScheduleTimer();
                 if (!canRun()) return;
-                scheduleTimer = window.setTimeout(function () {
+                scheduleTimer = scope.setTimeout(function () {
                     scheduleTimer = null;
                     if (!canRun()) return;
                     if (!prepareLoopClones()) return;
@@ -1333,7 +1332,7 @@
             function scheduleResume() {
                 pause();
                 if (!enabled || isInteractionHeld() || isPageHidden()) return;
-                scheduleTimer = window.setTimeout(function () {
+                scheduleTimer = scope.setTimeout(function () {
                     scheduleTimer = null;
                     refresh();
                 }, resumeDelay);
@@ -1439,13 +1438,13 @@
         }
 
         reconnectButtons.forEach(function (button) {
-            button.addEventListener("click", function () {
+            scope.listen(button, "click", function () {
                 refreshRealtime();
             });
         });
 
         if (filterTree) {
-            filterTree.addEventListener("click", function (event) {
+            scope.listen(filterTree, "click", function (event) {
                 const toggle = event.target.closest("[data-tree-toggle]");
                 if (toggle && filterTree.contains(toggle)) {
                     const branch = toggle.closest("[data-tree-key]");
@@ -1477,7 +1476,7 @@
         }
 
         if (deviceSelector) {
-            deviceSelector.addEventListener("change", function () {
+            scope.listen(deviceSelector, "change", function () {
                 if (activeFilter.type !== "master") return;
                 const nextID = deviceSelector.value || "";
                 const valid = currentMasterDevices().some(function (row) {
@@ -1504,7 +1503,7 @@
         function startRealtimeRefreshTimer() {
             stopRealtimeRefreshTimer();
             if (!isPageHidden()) {
-                realtimeRefreshTimer = window.setInterval(refreshRealtime, 10000);
+                realtimeRefreshTimer = scope.setInterval(refreshRealtime, 10000);
             }
         }
 
@@ -1520,7 +1519,7 @@
 
         scope.listen(window, "resize", function () {
             if (autoScrollResizeTimer !== null) window.clearTimeout(autoScrollResizeTimer);
-            autoScrollResizeTimer = window.setTimeout(function () {
+            autoScrollResizeTimer = scope.setTimeout(function () {
                 autoScrollResizeTimer = null;
                 refreshLayerAutoScrollers();
             }, 120);

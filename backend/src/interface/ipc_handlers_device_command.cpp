@@ -19,10 +19,6 @@ bool handle_device_command_request(const IpcHandlerContext& context, std::string
     const auto& id_json = context.id_json;
     const auto& method = context.method;
     auto* backend_service_ = context.backend_service;
-    (void)root;
-    (void)id_json;
-    (void)method;
-    (void)backend_service_;
 
     // 设备控制只接受模板声明的命令；底层 FC10 不作为通用 IPC method 暴露。
     if (method == "execute_device_command") {
@@ -32,13 +28,7 @@ bool handle_device_command_request(const IpcHandlerContext& context, std::string
             root,
             &request,
             &request_error);
-        if (!is_ok(request_status)) {
-            *response_json = ipc_protocol::build_error_response(
-                id_json,
-                status_code_string(request_status),
-                request_error.empty() ? "设备命令执行请求参数非法" : request_error);
-            return true;
-        }
+        if (respond_if_error(request_status, id_json, request_error.empty() ? "设备命令执行请求参数非法" : request_error, response_json)) return true;
 
         DeviceCommandExecuteResponse response;
         std::string error_message;

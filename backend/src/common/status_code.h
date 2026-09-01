@@ -15,6 +15,7 @@ enum class StatusCode {
     kIoError = 5,
     kProtocolError = 6,
     kInternalError = 7,
+    kConflict = 8,
 };
 
 // 将枚举值转换为字符串。
@@ -37,6 +38,8 @@ inline const char* to_string(StatusCode code)
         return "protocol_error";
     case StatusCode::kInternalError:
         return "internal_error";
+    case StatusCode::kConflict:
+        return "conflict";
     default:
         return "unknown";
     }

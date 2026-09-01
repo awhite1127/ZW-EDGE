@@ -28,6 +28,7 @@ std::string communication_trace_result(StatusCode status)
     case StatusCode::kInvalidState:
     case StatusCode::kNotFound:
     case StatusCode::kInternalError:
+    case StatusCode::kConflict:
         return "unknown_error";
     }
     return "unknown_error";

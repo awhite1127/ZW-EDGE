@@ -465,7 +465,7 @@
                 valueInput.required = true;
                 valueInput.value = String(item.value);
                 valueInput.setAttribute("aria-label", "枚举数值");
-                valueInput.addEventListener("input", function () { item.value = Number(valueInput.value); });
+                pageScope.listen(valueInput, "input", function () { item.value = Number(valueInput.value); });
                 const labelInput = document.createElement("input");
                 labelInput.type = "text";
                 labelInput.maxLength = 64;
@@ -474,7 +474,7 @@
                 labelInput.placeholder = "例如：运行";
                 labelInput.setAttribute("aria-label", "枚举显示文字");
                 labelInput.setAttribute("data-keyboard", "text-cn");
-                labelInput.addEventListener("input", function () { item.label = labelInput.value; });
+                pageScope.listen(labelInput, "input", function () { item.label = labelInput.value; });
                 const actions = document.createElement("div");
                 actions.className = "template-enum-actions";
                 [
@@ -486,7 +486,7 @@
                     button.className = "btn btn-small btn-secondary";
                     button.textContent = definition[0];
                     button.disabled = !definition[1];
-                    button.addEventListener("click", function () {
+                    pageScope.listen(button, "click", function () {
                         const target = index + definition[2];
                         const moved = currentEnumItems[index];
                         currentEnumItems[index] = currentEnumItems[target];
@@ -499,7 +499,7 @@
                 remove.type = "button";
                 remove.className = "btn btn-small btn-danger";
                 remove.textContent = "删除";
-                remove.addEventListener("click", function () {
+                pageScope.listen(remove, "click", function () {
                     currentEnumItems.splice(index, 1);
                     renderEnumItems();
                 });
@@ -632,7 +632,7 @@
                 input.value = group.name;
                 input.setAttribute("aria-label", "分组名称");
                 input.setAttribute("data-keyboard", "text-cn");
-                input.addEventListener("input", function () {
+                pageScope.listen(input, "input", function () {
                     group.name = input.value;
                     dirty = true;
                     syncFieldGroupControl();
@@ -649,7 +649,7 @@
                     button.textContent = definition[0];
                     const target = index + definition[1];
                     button.disabled = target < 0 || target >= realtimeGroups.length;
-                    button.addEventListener("click", function () {
+                    pageScope.listen(button, "click", function () {
                         if (button.disabled) return;
                         const moved = realtimeGroups[index];
                         realtimeGroups[index] = realtimeGroups[target];
@@ -665,7 +665,7 @@
                 remove.textContent = "删除";
                 remove.disabled = count > 0;
                 remove.title = count > 0 ? "请先迁移或取消该组内数据项的分组引用" : "删除空分组";
-                remove.addEventListener("click", function () {
+                pageScope.listen(remove, "click", function () {
                     if (count > 0) {
                         showToast("error", "该分组仍包含数据项，请先迁移或取消分组引用");
                         return;
@@ -705,7 +705,7 @@
                 moveUp.className = "btn btn-small btn-secondary";
                 moveUp.textContent = "上移";
                 moveUp.disabled = index === 0;
-                moveUp.addEventListener("click", function () {
+                pageScope.listen(moveUp, "click", function () {
                     if (index === 0) return;
                     const previous = templateReadBlocks[index - 1];
                     templateReadBlocks[index - 1] = templateReadBlocks[index];
@@ -719,7 +719,7 @@
                 moveDown.className = "btn btn-small btn-secondary";
                 moveDown.textContent = "下移";
                 moveDown.disabled = index === templateReadBlocks.length - 1;
-                moveDown.addEventListener("click", function () {
+                pageScope.listen(moveDown, "click", function () {
                     if (index >= templateReadBlocks.length - 1) return;
                     const next = templateReadBlocks[index + 1];
                     templateReadBlocks[index + 1] = templateReadBlocks[index];
@@ -732,14 +732,14 @@
                 editButton.type = "button";
                 editButton.className = "btn btn-small btn-secondary";
                 editButton.textContent = "编辑";
-                editButton.addEventListener("click", function () { openBlockEditor(index); });
+                pageScope.listen(editButton, "click", function () { openBlockEditor(index); });
                 const deleteButton = document.createElement("button");
                 deleteButton.type = "button";
                 deleteButton.className = "btn btn-small btn-danger";
                 deleteButton.textContent = "删除";
                 deleteButton.disabled = templateReadBlocks.length <= 1;
                 deleteButton.title = deleteButton.disabled ? "设备类型至少保留一个读取区块" : "删除当前读取区块";
-                deleteButton.addEventListener("click", async function () {
+                pageScope.listen(deleteButton, "click", async function () {
                     if (templateReadBlocks.length <= 1) return;
                     if (templateFields.some(function (field) { return field.read_block_key === block.block_key; })) {
                         const message = "该读取区块仍包含字段，请先移动或删除相关字段。";
@@ -841,14 +841,14 @@
                 editButton.type = "button";
                 editButton.className = "btn btn-small btn-secondary";
                 editButton.textContent = "编辑";
-                editButton.addEventListener("click", function () { openFieldEditor(index); });
+                pageScope.listen(editButton, "click", function () { openFieldEditor(index); });
                 const deleteButton = document.createElement("button");
                 deleteButton.type = "button";
                 deleteButton.className = "btn btn-small btn-danger";
                 deleteButton.textContent = "删除";
                 deleteButton.disabled = templateFields.length <= 1;
                 deleteButton.title = deleteButton.disabled ? "至少保留一个数据项" : "删除当前数据项";
-                deleteButton.addEventListener("click", function () {
+                pageScope.listen(deleteButton, "click", function () {
                     if (templateFields.length <= 1) return;
                     templateFields.splice(index, 1);
                     dirty = true;
@@ -1162,14 +1162,14 @@
             };
         }
 
-        form.querySelector("[data-template-block-add]").addEventListener("click", function () { openBlockEditor(-1); });
-        form.querySelector("[data-template-field-add]").addEventListener("click", function () { openFieldEditor(-1); });
-        fieldForm.querySelector('[name="data_type"]').addEventListener("change", function () { syncFieldTypeControls(fieldForm); });
-        fieldForm.elements.enum_enabled.addEventListener("change", function () {
+        pageScope.listen(form.querySelector("[data-template-block-add]"), "click", function () { openBlockEditor(-1); });
+        pageScope.listen(form.querySelector("[data-template-field-add]"), "click", function () { openFieldEditor(-1); });
+        pageScope.listen(fieldForm.querySelector('[name="data_type"]'), "change", function () { syncFieldTypeControls(fieldForm); });
+        pageScope.listen(fieldForm.elements.enum_enabled, "change", function () {
             renderEnumItems();
             syncEnumControls(fieldForm);
         });
-        fieldForm.querySelector("[data-template-enum-add]").addEventListener("click", function () {
+        pageScope.listen(fieldForm.querySelector("[data-template-enum-add]"), "click", function () {
             if (currentEnumItems.length >= 32) {
                 setFeedback(fieldFeedback, "error", "单字段枚举项不能超过 32 条");
                 return;
@@ -1182,21 +1182,21 @@
             currentEnumItems.push({ value: value, label: "", sort_order: currentEnumItems.length });
             renderEnumItems();
         });
-        fieldForm.elements.invalid_rule_type.addEventListener("change", function () { syncInvalidRuleControls(fieldForm); });
-        fieldForm.elements.show_in_realtime.addEventListener("change", function () { syncFieldGroupControl(); });
-        fieldForm.querySelector("[data-template-invalid-uint16-shortcut]").addEventListener("click", function () {
+        pageScope.listen(fieldForm.elements.invalid_rule_type, "change", function () { syncInvalidRuleControls(fieldForm); });
+        pageScope.listen(fieldForm.elements.show_in_realtime, "change", function () { syncFieldGroupControl(); });
+        pageScope.listen(fieldForm.querySelector("[data-template-invalid-uint16-shortcut]"), "click", function () {
             fieldForm.elements.invalid_rule_type.value = "greater_or_equal";
             fieldForm.elements.invalid_rule_value.value = "65520";
             syncInvalidRuleControls(fieldForm);
         });
-        fieldForm.querySelector('[name="register_offset"]').addEventListener("input", function () { updateFieldRangeHint(fieldForm); });
-        fieldBlockSelect.addEventListener("change", function () { updateFieldRangeHint(fieldForm); });
-        form.elements.device_address_stride.addEventListener("input", function () {
+        pageScope.listen(fieldForm.querySelector('[name="register_offset"]'), "input", function () { updateFieldRangeHint(fieldForm); });
+        pageScope.listen(fieldBlockSelect, "change", function () { updateFieldRangeHint(fieldForm); });
+        pageScope.listen(form.elements.device_address_stride, "input", function () {
             updateStrideHint();
             updateBlockRangeHint();
         });
-        blockForm.elements.block_start_offset.addEventListener("input", updateBlockRangeHint);
-        blockForm.elements.read_block_quantity.addEventListener("input", updateBlockRangeHint);
+        pageScope.listen(blockForm.elements.block_start_offset, "input", updateBlockRangeHint);
+        pageScope.listen(blockForm.elements.read_block_quantity, "input", updateBlockRangeHint);
             pageScope.listen(document, "keydown", function (event) {
             if (event.key === "Escape" && editorModalOpen(fieldPanel)) {
                 event.preventDefault();
@@ -1210,23 +1210,23 @@
         }, true);
 
         root.querySelectorAll("[data-template-block-cancel]").forEach(function (button) {
-            button.addEventListener("click", function () { setEditorModalOpen(blockPanel, false); });
+            pageScope.listen(button, "click", function () { setEditorModalOpen(blockPanel, false); });
         });
         root.querySelectorAll("[data-template-field-cancel]").forEach(function (button) {
-            button.addEventListener("click", function () { setEditorModalOpen(fieldPanel, false); });
+            pageScope.listen(button, "click", function () { setEditorModalOpen(fieldPanel, false); });
         });
-        root.querySelector("[data-template-block-save]").addEventListener("click", function () {
+        pageScope.listen(root.querySelector("[data-template-block-save]"), "click", function () {
             blockForm.dispatchEvent(new Event("submit", { cancelable: true }));
         });
-        root.querySelector("[data-template-field-save]").addEventListener("click", function () {
+        pageScope.listen(root.querySelector("[data-template-field-save]"), "click", function () {
             fieldForm.dispatchEvent(new Event("submit", { cancelable: true }));
         });
-        form.elements.realtime_grouping_enabled.addEventListener("change", function () {
+        pageScope.listen(form.elements.realtime_grouping_enabled, "change", function () {
             dirty = true;
             renderRealtimeGroups();
             renderFields();
         });
-        form.querySelector("[data-template-group-add]").addEventListener("click", function () {
+        pageScope.listen(form.querySelector("[data-template-group-add]"), "click", function () {
             realtimeGroups.push({ id: generateGroupID(), name: "新分组", order: realtimeGroups.length });
             dirty = true;
             renderRealtimeGroups();
@@ -1288,27 +1288,27 @@
         }
 
         root.querySelectorAll("[data-template-step-target]").forEach(function (tab) {
-            tab.addEventListener("click", function () {
+            pageScope.listen(tab, "click", function () {
                 try { showStep(Number(tab.dataset.templateStepTarget), currentStep === 1); }
                 catch (error) { setFeedback(feedback, "error", error.message); }
             });
         });
-        root.querySelector("[data-template-step-next]").addEventListener("click", function () {
+        pageScope.listen(root.querySelector("[data-template-step-next]"), "click", function () {
             try { showStep(2, true); setFeedback(feedback, "", ""); }
             catch (error) { setFeedback(feedback, "error", error.message); }
         });
-        root.querySelector("[data-template-step-previous]").addEventListener("click", function () { showStep(1, false); });
+        pageScope.listen(root.querySelector("[data-template-step-previous]"), "click", function () { showStep(1, false); });
 
         // 标记页面草稿已被用户修改。
         function markPageDraftDirty(event) {
             if (event.target.closest("[data-template-block-panel],[data-template-field-panel]")) return;
             dirty = true;
         }
-        form.addEventListener("input", markPageDraftDirty);
-        form.addEventListener("change", markPageDraftDirty);
+        pageScope.listen(form, "input", markPageDraftDirty);
+        pageScope.listen(form, "change", markPageDraftDirty);
         const backLink = document.querySelector("[data-template-editor-back]");
         if (backLink) {
-            backLink.addEventListener("click", async function (event) {
+            pageScope.listen(backLink, "click", async function (event) {
                 if (!dirty) return;
                 event.preventDefault();
                 if (await confirmAction({
@@ -1318,7 +1318,7 @@
                 })) window.location.href = backLink.href;
             });
         }
-        blockForm.addEventListener("submit", function (event) {
+        pageScope.listen(blockForm, "submit", function (event) {
             event.preventDefault();
             setFeedback(blockFeedback, "", "");
             if (!blockForm.reportValidity()) {
@@ -1387,7 +1387,7 @@
             setEditorModalOpen(blockPanel, false);
         });
 
-        fieldForm.addEventListener("submit", function (event) {
+        pageScope.listen(fieldForm, "submit", function (event) {
             event.preventDefault();
             setFeedback(fieldFeedback, "", "");
             if (!fieldForm.reportValidity()) {
@@ -1499,7 +1499,7 @@
             setEditorModalOpen(fieldPanel, false);
         });
 
-        form.addEventListener("submit", async function (event) {
+        pageScope.listen(form, "submit", async function (event) {
             event.preventDefault();
             setFeedback(feedback, "", "");
             let payload;
@@ -1560,7 +1560,7 @@
     // 初始化设备类型删除按钮和确认流程。
     function initDeviceTemplateDeleteControls() {
         document.querySelectorAll("[data-template-delete]").forEach(function (button) {
-            button.addEventListener("click", async function () {
+            pageScope.listen(button, "click", async function () {
                 const id = button.dataset.templateId || "";
                 const name = button.dataset.templateName || id;
                 if (!await confirmAction({
@@ -1593,7 +1593,7 @@
     // 初始化设备类型实时显示偏好控件。
     function initTemplateRealtimeDisplayControls() {
         document.querySelectorAll("[data-template-realtime-toggle]").forEach(function (input) {
-            input.addEventListener("change", async function () {
+            pageScope.listen(input, "change", async function () {
                 const previous = !input.checked;
                 const container = input.closest(".template-realtime-toggle");
                 const state = container ? container.querySelector("[data-template-realtime-state]") : null;
@@ -1628,7 +1628,7 @@
     // 初始化设备类型历史记录偏好控件。
     function initTemplateHistoryControls() {
         document.querySelectorAll("[data-template-history-toggle]").forEach(function (input) {
-            input.addEventListener("change", async function () {
+            pageScope.listen(input, "change", async function () {
                 const previous = !input.checked;
                 const container = input.closest(".template-realtime-toggle");
                 const state = container ? container.querySelector("[data-template-history-state]") : null;

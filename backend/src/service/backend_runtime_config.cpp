@@ -122,11 +122,12 @@ void BackendService::set_config_apply_status_locked(
     const std::string& polling_state,
     const std::string& status_message)
 {
-    system_status_.polling_running = false;
-    system_status_.polling_state = polling_state;
-    system_status_.last_status_message = status_message;
-    system_status_.last_heartbeat_ms = time_utils::steady_now_ms();
-    sync_system_status_to_store();
+    auto runtime_status = data_store_.get_system_status();
+    runtime_status.polling_running = false;
+    runtime_status.polling_state = polling_state;
+    runtime_status.last_status_message = status_message;
+    runtime_status.last_heartbeat_ms = time_utils::steady_now_ms();
+    data_store_.update_system_status(runtime_status);
 }
 
 // 完成配置应用，并按需恢复采集轮询。
@@ -136,8 +137,9 @@ BackendService::ConfigApplyOutcome BackendService::finish_config_apply_locked(
 {
     ConfigApplyOutcome outcome;
     outcome.warning_message = warning_message;
+    const auto current_runtime_status = data_store_.get_system_status();
     const std::string unavailable_warning =
-        has_unavailable_channels_warning(system_status_) ? system_status_.last_status_message : "";
+        has_unavailable_channels_warning(current_runtime_status) ? current_runtime_status.last_status_message : "";
 
     // 配置保存后是否恢复轮询取决于新的运行态，而不是保存前的按钮状态。
     if (!has_enabled_collection_target_locked()) {
@@ -174,10 +176,10 @@ BackendService::ConfigApplyOutcome BackendService::finish_config_apply_locked(
         append_event("info", "config_apply", "", outcome.message, "", time_utils::system_now_ms());
     }
 
-    load_system_status_from_store();
-    system_status_.last_status_message = outcome.message;
-    system_status_.last_heartbeat_ms = time_utils::steady_now_ms();
-    sync_system_status_to_store();
+    auto runtime_status = data_store_.get_system_status();
+    runtime_status.last_status_message = outcome.message;
+    runtime_status.last_heartbeat_ms = time_utils::steady_now_ms();
+    data_store_.update_system_status(runtime_status);
     return outcome;
 }
 
@@ -205,11 +207,12 @@ StatusCode BackendService::fail_config_apply_locked(
             set_last_error("polling", "", final_message, time_utils::system_now_ms());
         } else {
             backend_internal::append_message(&final_message, "旧运行态已恢复，原轮询已重新启动");
-            system_status_.polling_running = true;
-            system_status_.polling_state = "running";
-            system_status_.last_status_message = final_message;
-            system_status_.last_heartbeat_ms = time_utils::steady_now_ms();
-            sync_system_status_to_store();
+            auto runtime_status = data_store_.get_system_status();
+            runtime_status.polling_running = true;
+            runtime_status.polling_state = "running";
+            runtime_status.last_status_message = final_message;
+            runtime_status.last_heartbeat_ms = time_utils::steady_now_ms();
+            data_store_.update_system_status(runtime_status);
         }
     } else {
         backend_internal::append_message(&final_message, "轮询保持停止");
@@ -435,20 +438,21 @@ void BackendService::apply_prepared_runtime_config_locked(
     refresh_channel_statuses();
 
     const auto startup_warning = summarize_channel_open_failures(prepared.channel_open_summary);
+    auto runtime_status = data_store_.get_system_status();
     if (!startup_warning.empty()) {
-        system_status_.last_status_message = startup_warning;
+        runtime_status.last_status_message = startup_warning;
         Logger::warn(startup_warning);
         if (!prepared.channel_open_summary.failures.empty()) {
             const auto& failure = prepared.channel_open_summary.failures.front();
             set_last_error("channel_startup", failure.channel_id, failure.error_message, failure.attempt_time_ms);
         }
     } else {
-        system_status_.last_status_message = "后端服务就绪";
-        system_status_.diagnosis = make_normal_diagnosis(
+        runtime_status.last_status_message = "后端服务就绪";
+        runtime_status.diagnosis = make_normal_diagnosis(
             DiagnosisLevel::kSystem,
             "system",
             "系统",
-            system_status_.started_at_ms);
+            runtime_status.started_at_ms);
         {
             std::lock_guard<std::mutex> error_lock(error_mutex_);
             if (last_error_summary_.source == "channel_startup") {
@@ -458,8 +462,7 @@ void BackendService::apply_prepared_runtime_config_locked(
         Logger::info("后端服务已启动，所有启用通道均已就绪");
     }
 
-    sync_system_status_to_store();
-    load_system_status_from_store();
+    data_store_.update_system_status(runtime_status);
 }
 
 // 配置保存后重新加载运行态，并合并加载告警。
@@ -482,17 +485,17 @@ StatusCode BackendService::reload_config_for_apply(
 // 构造后端启动后的默认系统状态。
 void BackendService::build_default_runtime_status()
 {
-    system_status_ = {};
-    system_status_.config_loaded = initialized_;
-    system_status_.service_ready = initialized_;
-    system_status_.running = initialized_;
-    system_status_.polling_running = false;
-    system_status_.polling_state = initialized_ ? "stopped" : "not_started";
-    system_status_.started_at_ms = initialized_ ? time_utils::system_now_ms() : 0;
-    system_status_.last_heartbeat_ms = time_utils::steady_now_ms();
-    system_status_.last_status_message = initialized_ ? "后端服务就绪" : "后端服务尚未初始化";
-    system_status_.diagnosis = initialized_
-                                   ? make_normal_diagnosis(DiagnosisLevel::kSystem, "system", "系统", system_status_.started_at_ms)
+    SystemStatus runtime_status{};
+    runtime_status.config_loaded = initialized_;
+    runtime_status.service_ready = initialized_;
+    runtime_status.running = initialized_;
+    runtime_status.polling_running = false;
+    runtime_status.polling_state = initialized_ ? "stopped" : "not_started";
+    runtime_status.started_at_ms = initialized_ ? time_utils::system_now_ms() : 0;
+    runtime_status.last_heartbeat_ms = time_utils::steady_now_ms();
+    runtime_status.last_status_message = initialized_ ? "后端服务就绪" : "后端服务尚未初始化";
+    runtime_status.diagnosis = initialized_
+                                   ? make_normal_diagnosis(DiagnosisLevel::kSystem, "system", "系统", runtime_status.started_at_ms)
                                    : make_diagnosis(
                                          DiagnosisLevel::kSystem,
                                          "system",
@@ -502,6 +505,7 @@ void BackendService::build_default_runtime_status()
                                          0,
                                          0,
                                          0);
+    data_store_.update_system_status(runtime_status);
 }
 
 // 从通道管理器同步最新通道状态。
@@ -510,21 +514,6 @@ void BackendService::refresh_channel_statuses()
     for (const auto& status : channel_manager_.snapshot_statuses()) {
         data_store_.update_channel_status(status);
     }
-}
-
-// 将系统状态同步到内存数据存储。
-void BackendService::sync_system_status_to_store()
-{
-    // DataStore 中的轮询实时字段在轮询运行期间由 PollingService 持续维护。
-    // BackendService 仅在初始化、启动、停止、配置应用等状态切换路径同步 system_status_。
-    // 新增调用前需确认不会用旧的 system_status_ 覆盖 PollingService 正在更新的轮询统计。
-    data_store_.update_system_status(system_status_);
-}
-
-// 从内存数据存储恢复系统状态快照。
-void BackendService::load_system_status_from_store()
-{
-    system_status_ = data_store_.get_system_status();
 }
 
 // 查找通道配置。

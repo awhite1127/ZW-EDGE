@@ -19,10 +19,6 @@ bool handle_templates_request(const IpcHandlerContext& context, std::string* res
     const auto& id_json = context.id_json;
     const auto& method = context.method;
     auto* backend_service_ = context.backend_service;
-    (void)root;
-    (void)id_json;
-    (void)method;
-    (void)backend_service_;
 
     // 查询设备类型管理视图。
     if (method == "get_device_template_management") {
@@ -40,24 +36,12 @@ bool handle_templates_request(const IpcHandlerContext& context, std::string* res
             root,
             &request,
             &request_error);
-        if (!is_ok(request_status)) {
-            *response_json = ipc_protocol::build_error_response(
-                id_json,
-                status_code_string(request_status),
-                request_error.empty() ? "设备模板创建请求无效" : request_error);
-            return true;
-        }
+        if (respond_if_error(request_status, id_json, request_error.empty() ? "设备模板创建请求无效" : request_error, response_json)) return true;
 
         DeviceTemplateManagementView view;
         std::string create_error;
         const auto create_status = backend_service_->create_device_template(request, &view, &create_error);
-        if (!is_ok(create_status)) {
-            *response_json = ipc_protocol::build_error_response(
-                id_json,
-                status_code_string(create_status),
-                create_error.empty() ? "新增设备模板失败" : create_error);
-            return true;
-        }
+        if (respond_if_error(create_status, id_json, create_error.empty() ? "新增设备模板失败" : create_error, response_json)) return true;
         *response_json = ipc_protocol::build_success_response(
             id_json,
             nlohmann::json{
@@ -75,24 +59,12 @@ bool handle_templates_request(const IpcHandlerContext& context, std::string* res
             root,
             &request,
             &request_error);
-        if (!is_ok(request_status)) {
-            *response_json = ipc_protocol::build_error_response(
-                id_json,
-                status_code_string(request_status),
-                request_error.empty() ? "设备模板更新请求无效" : request_error);
-            return true;
-        }
+        if (respond_if_error(request_status, id_json, request_error.empty() ? "设备模板更新请求无效" : request_error, response_json)) return true;
 
         DeviceTemplateManagementView view;
         std::string update_error;
         const auto update_status = backend_service_->update_device_template(request, &view, &update_error);
-        if (!is_ok(update_status)) {
-            *response_json = ipc_protocol::build_error_response(
-                id_json,
-                status_code_string(update_status),
-                update_error.empty() ? "编辑设备模板失败" : update_error);
-            return true;
-        }
+        if (respond_if_error(update_status, id_json, update_error.empty() ? "编辑设备模板失败" : update_error, response_json)) return true;
         *response_json = ipc_protocol::build_success_response(
             id_json,
             nlohmann::json{
@@ -121,12 +93,7 @@ bool handle_templates_request(const IpcHandlerContext& context, std::string* res
             (*params_it)["show_in_realtime"].get<bool>(),
             &view,
             &update_error);
-        if (!is_ok(update_status)) {
-            *response_json = ipc_protocol::build_error_response(
-                id_json, status_code_string(update_status),
-                update_error.empty() ? "保存实时展示配置失败" : update_error);
-            return true;
-        }
+        if (respond_if_error(update_status, id_json, update_error.empty() ? "保存实时展示配置失败" : update_error, response_json)) return true;
         *response_json = ipc_protocol::build_success_response(id_json, nlohmann::json{
             {"message", "实时展示配置已保存"},
             {"template_management", ipc_json::to_json(view)},
@@ -152,12 +119,7 @@ bool handle_templates_request(const IpcHandlerContext& context, std::string* res
             (*params_it)["history_enabled"].get<bool>(),
             &view,
             &update_error);
-        if (!is_ok(update_status)) {
-            *response_json = ipc_protocol::build_error_response(
-                id_json, status_code_string(update_status),
-                update_error.empty() ? "保存历史记录配置失败" : update_error);
-            return true;
-        }
+        if (respond_if_error(update_status, id_json, update_error.empty() ? "保存历史记录配置失败" : update_error, response_json)) return true;
         *response_json = ipc_protocol::build_success_response(id_json, nlohmann::json{
             {"message", "历史记录配置已保存"},
             {"template_management", ipc_json::to_json(view)},
@@ -173,24 +135,12 @@ bool handle_templates_request(const IpcHandlerContext& context, std::string* res
             root,
             &template_id,
             &request_error);
-        if (!is_ok(request_status)) {
-            *response_json = ipc_protocol::build_error_response(
-                id_json,
-                status_code_string(request_status),
-                request_error.empty() ? "设备模板删除请求无效" : request_error);
-            return true;
-        }
+        if (respond_if_error(request_status, id_json, request_error.empty() ? "设备模板删除请求无效" : request_error, response_json)) return true;
 
         DeviceTemplateManagementView view;
         std::string delete_error;
         const auto delete_status = backend_service_->delete_device_template(template_id, &view, &delete_error);
-        if (!is_ok(delete_status)) {
-            *response_json = ipc_protocol::build_error_response(
-                id_json,
-                status_code_string(delete_status),
-                delete_error.empty() ? "删除设备模板失败" : delete_error);
-            return true;
-        }
+        if (respond_if_error(delete_status, id_json, delete_error.empty() ? "删除设备模板失败" : delete_error, response_json)) return true;
         *response_json = ipc_protocol::build_success_response(
             id_json,
             nlohmann::json{

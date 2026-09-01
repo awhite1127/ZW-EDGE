@@ -58,7 +58,6 @@ void append_error(std::string* target, const std::string& message)
     *target += message;
 }
 
-// 判断两组枚举项是否一致。
 bool same_enum_items(
     const std::vector<DeviceTemplateEnumItemDefinition>& left,
     const std::vector<DeviceTemplateEnumItemDefinition>& right)
@@ -70,64 +69,51 @@ bool same_enum_items(
            });
 }
 
-// 判断两组设备类型字段是否一致。
 bool same_template_fields(
     const std::vector<DeviceTemplateFieldDefinition>& left,
     const std::vector<DeviceTemplateFieldDefinition>& right)
 {
     return left.size() == right.size() &&
            std::equal(left.begin(), left.end(), right.begin(), [](const auto& first, const auto& second) {
-               return first.field_key == second.field_key &&
-                      first.display_name == second.display_name &&
+               return first.field_key == second.field_key && first.display_name == second.display_name &&
                       first.parser_id == second.parser_id && first.unit == second.unit &&
-                      first.data_type == second.data_type &&
-                      first.register_offset == second.register_offset &&
-                      first.register_count == second.register_count &&
-                      first.scale == second.scale && first.value_offset == second.value_offset &&
-                       first.precision == second.precision && first.summary == second.summary &&
-                       device_template_field_history_enabled(first) ==
-                           device_template_field_history_enabled(second) &&
+                      first.data_type == second.data_type && first.register_offset == second.register_offset &&
+                      first.register_count == second.register_count && first.scale == second.scale &&
+                      first.value_offset == second.value_offset && first.precision == second.precision &&
+                      first.summary == second.summary &&
+                      device_template_field_history_enabled(first) == device_template_field_history_enabled(second) &&
                       first.display_order == second.display_order &&
                       first.invalid_rule_type == second.invalid_rule_type &&
                       first.invalid_rule_value == second.invalid_rule_value &&
                       first.invalid_rule_min == second.invalid_rule_min &&
-                      first.invalid_rule_max == second.invalid_rule_max &&
-                      first.byte_order == second.byte_order &&
-                      first.word_order == second.word_order &&
-                      first.read_block_key == second.read_block_key &&
+                      first.invalid_rule_max == second.invalid_rule_max && first.byte_order == second.byte_order &&
+                      first.word_order == second.word_order && first.read_block_key == second.read_block_key &&
                       first.bit_index == second.bit_index &&
-                      device_template_field_show_in_realtime(first) ==
-                          device_template_field_show_in_realtime(second) &&
+                      device_template_field_show_in_realtime(first) == device_template_field_show_in_realtime(second) &&
                       first.realtime_group_id == second.realtime_group_id &&
                       same_enum_items(first.enum_items, second.enum_items);
            });
 }
 
-// 判断两组读取区块是否一致。
 bool same_read_blocks(
     const std::vector<DeviceTemplateReadBlockDefinition>& left,
     const std::vector<DeviceTemplateReadBlockDefinition>& right)
 {
     return left.size() == right.size() &&
            std::equal(left.begin(), left.end(), right.begin(), [](const auto& first, const auto& second) {
-               return first.block_key == second.block_key &&
-                      first.display_name == second.display_name &&
-                      first.function_code == second.function_code &&
-                      first.start_offset == second.start_offset &&
-                      first.register_count == second.register_count &&
-                      first.sort_order == second.sort_order;
+               return first.block_key == second.block_key && first.display_name == second.display_name &&
+                      first.function_code == second.function_code && first.start_offset == second.start_offset &&
+                      first.register_count == second.register_count && first.sort_order == second.sort_order;
            });
 }
 
-// 判断两组实时分组是否一致。
 bool same_realtime_groups(
     const std::vector<DeviceTemplateRealtimeGroupDefinition>& left,
     const std::vector<DeviceTemplateRealtimeGroupDefinition>& right)
 {
     return left.size() == right.size() &&
            std::equal(left.begin(), left.end(), right.begin(), [](const auto& first, const auto& second) {
-               return first.group_id == second.group_id &&
-                      first.display_name == second.display_name &&
+               return first.group_id == second.group_id && first.display_name == second.display_name &&
                       first.sort_order == second.sort_order;
            });
 }
@@ -147,21 +133,17 @@ bool same_write_commands(
                       first.absolute_register == second.absolute_register &&
                       first.fixed_values == second.fixed_values &&
                       first.value_fields.empty() == second.value_fields.empty() &&
-                      first.warnings == second.warnings &&
-                      first.require_confirm == second.require_confirm &&
-                      first.confirm_text == second.confirm_text &&
-                      first.success_hint == second.success_hint;
+                      first.warnings == second.warnings && first.require_confirm == second.require_confirm &&
+                      first.confirm_text == second.confirm_text && first.success_hint == second.success_hint;
            });
 }
 
-// 判断两份自定义设备类型定义是否一致。
 bool same_custom_template_definition(
     const DeviceTemplateDefinition& stored,
     const DeviceTemplateDefinition& requested)
 {
     return !stored.builtin && stored.template_id == requested.template_id &&
-           stored.display_name == requested.display_name &&
-           stored.description == requested.description &&
+           stored.display_name == requested.display_name && stored.description == requested.description &&
            stored.default_start_register == requested.default_start_register &&
            stored.device_address_stride == requested.device_address_stride &&
            stored.realtime_grouping_enabled == requested.realtime_grouping_enabled &&

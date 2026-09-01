@@ -19,19 +19,12 @@ bool handle_events_request(const IpcHandlerContext& context, std::string* respon
     const auto& id_json = context.id_json;
     const auto& method = context.method;
     auto* backend_service_ = context.backend_service;
-    (void)root;
-    (void)id_json;
-    (void)method;
-    (void)backend_service_;
 
     if (method == "list_recent_events") {
         std::vector<ServiceEvent> events;
         std::string event_error;
         const auto event_status = backend_service_->get_recent_events(100, &events, &event_error);
-        if (!is_ok(event_status)) {
-            *response_json = ipc_protocol::build_error_response(id_json, status_code_string(event_status), event_error);
-            return true;
-        }
+        if (respond_if_error(event_status, id_json, event_error, response_json)) return true;
         *response_json = ipc_protocol::build_success_response(
             id_json,
             ipc_json::to_json_array(events));
@@ -43,10 +36,7 @@ bool handle_events_request(const IpcHandlerContext& context, std::string* respon
         EventHistoryResult result;
         std::string event_error;
         const auto event_status = backend_service_->query_service_events(query, &result, &event_error);
-        if (!is_ok(event_status)) {
-            *response_json = ipc_protocol::build_error_response(id_json, status_code_string(event_status), event_error);
-            return true;
-        }
+        if (respond_if_error(event_status, id_json, event_error, response_json)) return true;
         *response_json = ipc_protocol::build_success_response(
             id_json,
             ipc_json::to_json(result));
@@ -58,10 +48,7 @@ bool handle_events_request(const IpcHandlerContext& context, std::string* respon
         std::vector<ServiceEvent> events;
         std::string event_error;
         const auto event_status = backend_service_->export_service_events(query, &events, &event_error);
-        if (!is_ok(event_status)) {
-            *response_json = ipc_protocol::build_error_response(id_json, status_code_string(event_status), event_error);
-            return true;
-        }
+        if (respond_if_error(event_status, id_json, event_error, response_json)) return true;
         *response_json = ipc_protocol::build_success_response(
             id_json,
             ipc_json::to_json_array(events));
@@ -71,10 +58,7 @@ bool handle_events_request(const IpcHandlerContext& context, std::string* respon
     if (method == "clear_recent_events") {
         std::string event_error;
         const auto event_status = backend_service_->clear_recent_events(&event_error);
-        if (!is_ok(event_status)) {
-            *response_json = ipc_protocol::build_error_response(id_json, status_code_string(event_status), event_error);
-            return true;
-        }
+        if (respond_if_error(event_status, id_json, event_error, response_json)) return true;
         *response_json = ipc_protocol::build_success_response(
             id_json,
             nlohmann::json{{"message", "历史事件已清除"}});

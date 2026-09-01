@@ -19,7 +19,7 @@
 #include "datastore/alarm_store.h"
 #include "datastore/communication_store.h"
 #include "datastore/config_store.h"
-#include "datastore/data_store.h"
+#include "datastore/runtime_state_store.h"
 #include "datastore/device_template_store.h"
 #include "datastore/event_store.h"
 #include "datastore/history_store.h"
@@ -62,9 +62,9 @@ class BackendService {
 public:
     // 销毁 BackendService 实例并释放相关资源。
     ~BackendService();
-    // 禁止复制后端服务实例。
-    BackendService() = default;
     // 构造 BackendService 实例。
+    BackendService() = default;
+    // 禁止复制后端服务实例。
     BackendService(const BackendService&) = delete;
     // 禁止复制赋值后端服务实例。
     BackendService& operator=(const BackendService&) = delete;
@@ -534,10 +534,6 @@ private:
     void build_default_runtime_status();
     // 刷新通道状态列表。
     void refresh_channel_statuses();
-    // 将系统状态同步到运行数据存储。
-    void sync_system_status_to_store();
-    // 从运行数据存储加载系统状态。
-    void load_system_status_from_store();
 
     // 配置变更前置检查。
     StatusCode ensure_config_mutation_ready_locked(
@@ -657,7 +653,8 @@ private:
     void data_maintenance_loop();
 
     // 锁层级约定：配置与运行态所有权切换使用独占锁；页面/IPC 快照和手动设备 I/O 使用共享锁。
-    // 需要同时获取组件内部锁时先持有本锁，再进入 DataStore、MQTT、Alarm 等组件；耗时停止/join 在锁外执行。
+    // 需要同时获取组件内部锁时先持有本锁，再进入 RuntimeStateStore、MQTT、Alarm 等组件；
+    // 耗时停止/join 在锁外执行。
     mutable std::shared_mutex service_mutex_;
     // 网络配置保存、应用和失败回滚必须完整串行；锁顺序固定为本锁 -> service_mutex_。
     mutable std::mutex network_operation_mutex_;
@@ -684,8 +681,7 @@ private:
     SystemConfig system_config_{};
     TimeSettings applied_time_settings_{};
     bool applied_time_settings_initialized_{false};
-    SystemStatus system_status_{};
-    DataStore data_store_{};
+    RuntimeStateStore data_store_{};
     HistoryStore history_store_{};
     AlarmStore alarm_store_{};
     EventStore event_store_{};

@@ -7,6 +7,7 @@
 
 #include "common/logger.h"
 #include "common/time_utils.h"
+#include "model/alarm_validation.h"
 #include "service/backend_service_internal.h"
 
 namespace edge_controller {
@@ -96,10 +97,12 @@ StatusCode BackendService::upsert_alarm_rule(const AlarmRule& requested, AlarmRu
     }
     const auto* context = find_alarm_point_context(contexts, requested.device_id, requested.point_key);
     if (context == nullptr) { if (error_message) *error_message = "设备数据项不存在: " + requested.point_key; return StatusCode::kNotFound; }
-    if (requested.trigger_count < 1 || requested.trigger_count > 100 || requested.recovery_count < 1 || requested.recovery_count > 100) {
+    if (requested.trigger_count > 100 || requested.recovery_count > 100) {
         if (error_message) *error_message = "trigger_count 和 recovery_count 必须在 1～100 之间";
         return StatusCode::kInvalidArgument;
     }
+    const auto validation_status = validate_alarm_rule(requested, error_message);
+    if (!is_ok(validation_status)) return validation_status;
     auto final_rule = requested;
     final_rule.updated_at_ms = time_utils::system_now_ms();
     const auto status = alarm_evaluator_.upsert_rule(final_rule, *context, error_message);

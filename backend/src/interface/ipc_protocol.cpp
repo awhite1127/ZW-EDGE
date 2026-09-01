@@ -16,6 +16,56 @@ namespace edge_controller::ipc_protocol {
 
 namespace {
 
+std::string error_domain(const std::string& code)
+{
+    if (code == "invalid_request" || code == "invalid_argument" || code == "method_not_found") {
+        return "request";
+    }
+    if (code == "not_found") return "resource";
+    if (code == "conflict" || code == "invalid_state") return "state";
+    if (code == "timeout" || code == "io_error" || code == "protocol_error") return "transport";
+    return "service";
+}
+
+bool error_retryable(const std::string& code)
+{
+    return code == "timeout" || code == "io_error" || code == "server_busy" ||
+           code == "internal_error";
+}
+
+std::string to_lower_copy(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return value;
+}
+
+StatusCode parse_serial_parity(const std::string& text, SerialParity* output)
+{
+    const auto normalized = to_lower_copy(text);
+    if (normalized == "none" || normalized == "n") { *output = SerialParity::kNone; return StatusCode::kOk; }
+    if (normalized == "even" || normalized == "e") { *output = SerialParity::kEven; return StatusCode::kOk; }
+    if (normalized == "odd" || normalized == "o") { *output = SerialParity::kOdd; return StatusCode::kOk; }
+    return StatusCode::kInvalidArgument;
+}
+
+StatusCode parse_channel_type(const std::string& text, ChannelType* output)
+{
+    const auto normalized = to_lower_copy(text);
+    if (normalized == "modbus_rtu_serial") { *output = ChannelType::kModbusRtuSerial; return StatusCode::kOk; }
+    if (normalized == "modbus_tcp") { *output = ChannelType::kModbusTcp; return StatusCode::kOk; }
+    return StatusCode::kInvalidArgument;
+}
+
+StatusCode parse_master_protocol(const std::string& text, MasterProtocol* output)
+{
+    const auto normalized = to_lower_copy(text);
+    if (normalized == "modbus_rtu") { *output = MasterProtocol::kModbusRtu; return StatusCode::kOk; }
+    if (normalized == "modbus_tcp") { *output = MasterProtocol::kModbusTcp; return StatusCode::kOk; }
+    return StatusCode::kInvalidArgument;
+}
+
 // 查找字段。
 const nlohmann::json* find_field(const nlohmann::json& object, const std::string& field_name)
 {
@@ -126,15 +176,6 @@ bool number_as_uint32(const nlohmann::json& value, std::uint32_t max_value, std:
     }
     *output = static_cast<std::uint32_t>(number);
     return true;
-}
-
-// 在协议表示与内部模型之间转换数据。
-std::string to_lower_copy(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
-        return static_cast<char>(std::tolower(ch));
-    });
-    return value;
 }
 
 // 读取并校验字符串字段。
@@ -510,55 +551,6 @@ StatusCode require_string_array_field(
         *output = std::move(values);
     }
     return StatusCode::kOk;
-}
-
-// 解析串口校验位配置。
-StatusCode parse_serial_parity(const std::string& text, SerialParity* output)
-{
-    const auto normalized = to_lower_copy(text);
-    if (normalized == "none" || normalized == "n") {
-        *output = SerialParity::kNone;
-        return StatusCode::kOk;
-    }
-    if (normalized == "even" || normalized == "e") {
-        *output = SerialParity::kEven;
-        return StatusCode::kOk;
-    }
-    if (normalized == "odd" || normalized == "o") {
-        *output = SerialParity::kOdd;
-        return StatusCode::kOk;
-    }
-    return StatusCode::kInvalidArgument;
-}
-
-// 解析通道类型。
-StatusCode parse_channel_type(const std::string& text, ChannelType* output)
-{
-    const auto normalized = to_lower_copy(text);
-    if (normalized == "modbus_rtu_serial") {
-        *output = ChannelType::kModbusRtuSerial;
-        return StatusCode::kOk;
-    }
-    if (normalized == "modbus_tcp") {
-        *output = ChannelType::kModbusTcp;
-        return StatusCode::kOk;
-    }
-    return StatusCode::kInvalidArgument;
-}
-
-// 解析主站协议类型。
-StatusCode parse_master_protocol(const std::string& text, MasterProtocol* output)
-{
-    const auto normalized = to_lower_copy(text);
-    if (normalized == "modbus_rtu") {
-        *output = MasterProtocol::kModbusRtu;
-        return StatusCode::kOk;
-    }
-    if (normalized == "modbus_tcp") {
-        *output = MasterProtocol::kModbusTcp;
-        return StatusCode::kOk;
-    }
-    return StatusCode::kInvalidArgument;
 }
 
 // 规范化输入并返回稳定结果。
@@ -999,7 +991,10 @@ std::string build_error_response(
         {"success", false},
         {"error", {
             {"code", code},
+            {"domain", error_domain(code)},
             {"message", message},
+            {"params", nlohmann::json::object()},
+            {"retryable", error_retryable(code)},
         }},
     }.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
@@ -1635,20 +1630,8 @@ StatusCode extract_device_template_create_request(
                 });
             }
         }
-        std::string invalid_rule_error;
-        if (!is_ok(validate_device_template_field_invalid_rule(field, &invalid_rule_error))) {
-            if (error_message != nullptr) {
-                *error_message = "params.fields[" + std::to_string(index) + "] " + invalid_rule_error;
-            }
-            return StatusCode::kInvalidArgument;
-        }
-        std::string bit_enum_error;
-        if (!is_ok(validate_device_template_field_bit_and_enum(field, &bit_enum_error))) {
-            if (error_message != nullptr) {
-                *error_message = "params.fields[" + std::to_string(index) + "] " + bit_enum_error;
-            }
-            return StatusCode::kInvalidArgument;
-        }
+        // IPC 只解析 JSON 类型、数值表示和字段形状；无效值规则、bit/枚举
+        // 兼容性等设备模板业务不变量由 DeviceTemplateStore 的领域校验统一负责。
         parsed.fields.push_back(std::move(field));
     }
 
@@ -2243,8 +2226,10 @@ StatusCode extract_alarm_rule_upsert_request(const nlohmann::json& request, Alar
     status = require_bool_field(*params, "high_enabled", &rule.high_enabled, error_message); if (!is_ok(status)) return status;
     status = require_bool_field(*params, "low_enabled", &rule.low_enabled, error_message); if (!is_ok(status)) return status;
     status = require_string_field(*params, "level", &rule.level, error_message); if (!is_ok(status)) return status;
-    status = require_uint_range_field(*params, "trigger_count", 1, 100, &rule.trigger_count, error_message); if (!is_ok(status)) return status;
-    status = require_uint_range_field(*params, "recovery_count", 1, 100, &rule.recovery_count, error_message); if (!is_ok(status)) return status;
+    // IPC 只负责 JSON 类型和 uint32 边界；连续次数的 1-100 业务规则由领域
+    // validator 统一处理，避免 Web、IPC 和 Store 各自维护一份阈值。
+    status = require_uint_field(*params, "trigger_count", &rule.trigger_count, error_message); if (!is_ok(status)) return status;
+    status = require_uint_field(*params, "recovery_count", &rule.recovery_count, error_message); if (!is_ok(status)) return status;
     const auto parse_double = [&](const char* name, double* output) {
         const auto* value = find_field(*params, name);
         if (value == nullptr || !number_as_double(*value, output)) { if (error_message) *error_message = std::string("缺少或非法的 params.") + name; return false; }

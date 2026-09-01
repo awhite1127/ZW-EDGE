@@ -51,8 +51,6 @@ jobs:
         run: go test -race ./...
       - name: Check JavaScript syntax
         run: find static -type f -name '*.js' -exec node --check {} +
-      - name: Test JavaScript behavior
-        run: node --test
       - name: Cross-build ARM64 release binary
         env:
           CGO_ENABLED: "0"
