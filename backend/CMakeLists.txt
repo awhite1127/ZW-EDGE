@@ -77,99 +77,100 @@ find_package(Threads REQUIRED)
 # 第一方源文件集中链接到核心库，便于主程序复用一致的实现。
 add_library(edge_controller_core STATIC
     third_party/sqlite/sqlite3.c
-    src/app/application.cpp
-    src/common/readable_error.cpp
-    src/channel/bounded_address_resolver.cpp
-    src/channel/channel_wake_event.cpp
-    src/channel/serial_channel.cpp
-    src/channel/tcp_channel.cpp
-    src/collect/block_read_plan.cpp
-    src/collect/master_collector.cpp
-    src/collect/modbus_trace_recorder.cpp
-    src/collect/modbus_write_executor.cpp
-    src/collect/register_mapper.cpp
-    src/datastore/communication_store.cpp
-    src/datastore/alarm_store.cpp
-    src/datastore/config_import_transaction.cpp
-    src/datastore/config_store.cpp
-    src/datastore/config_store_schema.cpp
-    src/datastore/config_store_system.cpp
-    src/datastore/config_store_time.cpp
-    src/datastore/config_store_collection.cpp
-    src/datastore/config_store_network.cpp
-    src/datastore/config_store_mqtt.cpp
-    src/datastore/config_store_modbus_server.cpp
-    src/datastore/config_store_web_auth.cpp
-    src/datastore/config_store_sql.cpp
-    src/datastore/data_store.cpp
-    src/datastore/device_template_store.cpp
-    src/datastore/history_store.cpp
-    src/datastore/event_store.cpp
-    src/interface/ipc_json.cpp
-    src/interface/ipc_protocol.cpp
-    src/interface/ipc_server.cpp
-    src/interface/ipc_handlers_system.cpp
-    src/interface/ipc_handlers_events.cpp
-    src/interface/ipc_handlers_alarms.cpp
-    src/interface/ipc_handlers_settings.cpp
-    src/interface/ipc_handlers_modbus_server.cpp
-    src/interface/ipc_handlers_collection.cpp
-    src/interface/ipc_handlers_history.cpp
-    src/interface/ipc_handlers_templates.cpp
-    src/interface/ipc_handlers_device_command.cpp
-    src/manager/channel_manager.cpp
-    src/manager/topology_manager.cpp
-    src/model/diagnosis_status.cpp
-    src/model/alarm_validation.cpp
-    src/model/device_template.cpp
-    src/model/builtin_device_templates.cpp
-    src/model/builtin_wired_devices.cpp
-    src/model/builtin_wireless_devices.cpp
-    src/model/modbus_server.cpp
-    src/modbus_server/modbus_register_encoder.cpp
-    src/modbus_server/modbus_register_bank.cpp
-    src/modbus_server/modbus_export_service.cpp
-    src/modbus_server/modbus_tcp_server.cpp
-    src/platform/linux_time_runtime.cpp
-    src/mqtt/mqtt_client_mosquitto.cpp
-    src/mqtt/mqtt_payload_builder.cpp
-    src/mqtt/mqtt_publisher_service.cpp
-    src/protocol/modbus_rtu_protocol.cpp
-    src/protocol/modbus_tcp_client.cpp
-    src/protocol/modbus_tcp_protocol.cpp
-    src/security/password_hash.cpp
-    src/service/backend_lifecycle.cpp
-    src/service/backend_polling_control.cpp
-    src/service/backend_runtime_config.cpp
-    src/service/backend_alarm.cpp
-    src/service/alarm_evaluator.cpp
-    src/service/backend_channel_config.cpp
-    src/service/backend_config_common.cpp
-    src/service/backend_config_import_export.cpp
-    src/service/backend_config_validation.cpp
-    src/service/backend_master_config.cpp
-    src/service/backend_device_command.cpp
-    src/service/backend_mqtt_config.cpp
-    src/service/backend_modbus_server.cpp
-    src/service/backend_network_config.cpp
-    src/service/backend_settings.cpp
-    src/service/backend_system_overview.cpp
-    src/service/backend_update.cpp
-    src/service/backend_time_settings.cpp
-    src/service/backend_time_change.cpp
-    src/service/time_jump_detector.cpp
-    src/service/backend_query_collection.cpp
-    src/service/backend_query_events.cpp
-    src/service/backend_query_history.cpp
-    src/service/backend_query_templates.cpp
-    src/service/backend_network_runtime.cpp
-    src/service/polling_service.cpp
-    src/service/polling_service_loop.cpp
-    src/service/polling_service_collect.cpp
-    src/service/polling_service_failure.cpp
-    src/service/polling_service_history.cpp
-    src/service/polling_service_status.cpp
-    src/service/serial_port_enumerator.cpp
+    src/application/app/application.cpp
+    src/shared/common/readable_error.cpp
+    src/communication/channel/bounded_address_resolver.cpp
+    src/communication/channel/channel_wake_event.cpp
+    src/communication/channel/serial_channel.cpp
+    src/communication/channel/tcp_channel.cpp
+    src/communication/collect/block_read_plan.cpp
+    src/communication/collect/master_collector.cpp
+    src/communication/collect/modbus_trace_recorder.cpp
+    src/communication/collect/modbus_write_executor.cpp
+    src/communication/collect/register_mapper.cpp
+    src/data/datastore/communication_store.cpp
+    src/data/datastore/alarm_store.cpp
+    src/data/datastore/config_import_transaction.cpp
+    src/data/datastore/config_store.cpp
+    src/data/datastore/config_store_schema.cpp
+    src/data/datastore/config_store_system.cpp
+    src/data/datastore/config_store_time.cpp
+    src/data/datastore/config_store_collection.cpp
+    src/data/datastore/config_store_network.cpp
+    src/data/datastore/config_store_mqtt.cpp
+    src/data/datastore/config_store_modbus_server.cpp
+    src/data/datastore/config_store_web_auth.cpp
+    src/data/datastore/config_store_sql.cpp
+    src/data/datastore/data_store.cpp
+    src/data/datastore/device_template_store.cpp
+    src/data/datastore/history_store.cpp
+    src/data/datastore/event_store.cpp
+    src/application/interface/ipc_json.cpp
+    src/application/interface/ipc_protocol.cpp
+    src/application/interface/ipc_server.cpp
+    src/application/interface/ipc_handlers_system.cpp
+    src/application/interface/ipc_handlers_events.cpp
+    src/application/interface/ipc_handlers_alarms.cpp
+    src/application/interface/ipc_handlers_settings.cpp
+    src/application/interface/ipc_handlers_modbus_server.cpp
+    src/application/interface/ipc_handlers_collection.cpp
+    src/application/interface/ipc_handlers_history.cpp
+    src/application/interface/ipc_handlers_templates.cpp
+    src/application/interface/ipc_handlers_device_command.cpp
+    src/application/manager/channel_manager.cpp
+    src/application/manager/topology_manager.cpp
+    src/data/model/diagnosis_status.cpp
+    src/data/model/device_value_status.cpp
+    src/data/model/alarm_validation.cpp
+    src/data/model/device_template.cpp
+    src/data/model/builtin_device_templates.cpp
+    src/data/model/builtin_wired_devices.cpp
+    src/data/model/builtin_wireless_devices.cpp
+    src/data/model/modbus_server.cpp
+    src/communication/modbus_server/modbus_register_encoder.cpp
+    src/communication/modbus_server/modbus_register_bank.cpp
+    src/communication/modbus_server/modbus_export_service.cpp
+    src/communication/modbus_server/modbus_tcp_server.cpp
+    src/infrastructure/platform/linux_time_runtime.cpp
+    src/communication/mqtt/mqtt_client_mosquitto.cpp
+    src/communication/mqtt/mqtt_payload_builder.cpp
+    src/communication/mqtt/mqtt_publisher_service.cpp
+    src/communication/protocol/modbus_rtu_protocol.cpp
+    src/communication/protocol/modbus_tcp_client.cpp
+    src/communication/protocol/modbus_tcp_protocol.cpp
+    src/infrastructure/security/password_hash.cpp
+    src/application/service/backend_lifecycle.cpp
+    src/application/service/backend_polling_control.cpp
+    src/application/service/backend_runtime_config.cpp
+    src/application/service/backend_alarm.cpp
+    src/application/service/alarm_evaluator.cpp
+    src/application/service/backend_channel_config.cpp
+    src/application/service/backend_config_common.cpp
+    src/application/service/backend_config_import_export.cpp
+    src/application/service/backend_config_validation.cpp
+    src/application/service/backend_master_config.cpp
+    src/application/service/backend_device_command.cpp
+    src/application/service/backend_mqtt_config.cpp
+    src/application/service/backend_modbus_server.cpp
+    src/application/service/backend_network_config.cpp
+    src/application/service/backend_settings.cpp
+    src/application/service/backend_system_overview.cpp
+    src/application/service/backend_update.cpp
+    src/application/service/backend_time_settings.cpp
+    src/application/service/backend_time_change.cpp
+    src/application/service/time_jump_detector.cpp
+    src/application/service/backend_query_collection.cpp
+    src/application/service/backend_query_events.cpp
+    src/application/service/backend_query_history.cpp
+    src/application/service/backend_query_templates.cpp
+    src/application/service/backend_network_runtime.cpp
+    src/application/service/polling_service.cpp
+    src/application/service/polling_service_loop.cpp
+    src/application/service/polling_service_collect.cpp
+    src/application/service/polling_service_failure.cpp
+    src/application/service/polling_service_history.cpp
+    src/application/service/polling_service_status.cpp
+    src/application/service/serial_port_enumerator.cpp
 )
 
 target_include_directories(edge_controller_core
@@ -211,7 +212,7 @@ target_link_libraries(edge_controller_core PUBLIC Threads::Threads)
 
 add_executable(${PROJECT_NAME}
     main.cpp
-    src/maintenance/admin_recovery.cpp
+    src/infrastructure/maintenance/admin_recovery.cpp
 )
 
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_17)
@@ -320,6 +321,19 @@ if(EDGE_CONTROLLER_BUILD_TESTS)
     )
     set_tests_properties(edge_controller_alarm_rule_validation PROPERTIES TIMEOUT 30)
 
+    add_executable(edge_controller_device_value_status_test
+        tests/device_value_status_test.cpp
+    )
+    target_compile_features(edge_controller_device_value_status_test PRIVATE cxx_std_17)
+    target_link_libraries(edge_controller_device_value_status_test
+        PRIVATE edge_controller_core Threads::Threads
+    )
+    add_test(
+        NAME edge_controller_device_value_status
+        COMMAND edge_controller_device_value_status_test
+    )
+    set_tests_properties(edge_controller_device_value_status PROPERTIES TIMEOUT 30)
+
     add_executable(edge_controller_history_store_test
         tests/history_store_test.cpp
     )
@@ -362,6 +376,7 @@ if(EDGE_CONTROLLER_BUILD_TESTS)
         edge_controller_data_store_realtime_snapshot_test
         edge_controller_alarm_evaluator_batch_test
         edge_controller_alarm_rule_validation_test
+        edge_controller_device_value_status_test
         edge_controller_history_store_test
         edge_controller_bounded_address_resolver_integration_test
     )

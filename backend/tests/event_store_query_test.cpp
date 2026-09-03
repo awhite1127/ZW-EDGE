@@ -3,8 +3,8 @@
 #include <string>
 #include <utility>
 
-#include "common/time_utils.h"
-#include "datastore/event_store.h"
+#include "shared/common/time_utils.h"
+#include "data/datastore/event_store.h"
 
 namespace {
 

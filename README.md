@@ -19,16 +19,27 @@ Edge Controller 是面向 RK3562 / AArch64 Linux 边缘控制器的完整产品�
 
 ```text
 backend/
-  src/app/              进程装配与生命周期
-  src/interface/        UDS IPC、协议编解码和领域 handler
-  src/service/          BackendService 门面、配置应用和运行协调
-  src/datastore/        SQLite 存储、schema 校验和数据维护
-  src/collect/          读取计划、轮询采集、解析和写命令
-  src/channel/          串口与 TCP 通道
-  src/protocol/         Modbus RTU/TCP 协议
-  src/mqtt/             MQTT 客户端、payload 和发布服务
-  src/modbus_server/    Modbus TCP 北向服务与寄存器映射
-  src/model/            稳定领域模型
+  src/
+    application/
+      app/                    进程装配与生命周期
+      interface/              UDS IPC、协议编解码和领域 handler
+      service/                BackendService 门面、配置应用和运行协调
+      manager/                通道与拓扑管理
+    communication/
+      channel/                串口与 TCP 通道
+      collect/                读取计划、轮询采集、解析和写命令
+      protocol/               Modbus RTU/TCP 协议
+      mqtt/                   MQTT 客户端、payload 和发布服务
+      modbus_server/          Modbus TCP 北向服务与寄存器映射
+    data/
+      datastore/              SQLite 存储、schema 校验和数据维护
+      model/                  稳定领域模型
+    infrastructure/
+      platform/               Linux 平台能力
+      security/               密码与安全能力
+      maintenance/            恢复与维护能力
+    shared/
+      common/                 通用类型、工具和兼容层
 web/
   cmd/edge-web/         Web 进程入口
   internal/ipc/         可取消、限并发的 IPC 客户端

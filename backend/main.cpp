@@ -1,9 +1,9 @@
 // 后端进程入口只负责启动 Application 并返回退出码，生命周期细节由应用装配层管理。
-#include "app/application.h"
-#include "channel/bounded_address_resolver.h"
-#include "common/logger.h"
-#include "interface/ipc_server.h"
-#include "maintenance/admin_recovery.h"
+#include "application/app/application.h"
+#include "communication/channel/bounded_address_resolver.h"
+#include "shared/common/logger.h"
+#include "application/interface/ipc_server.h"
+#include "infrastructure/maintenance/admin_recovery.h"
 
 #include <chrono>
 #include <cstdlib>

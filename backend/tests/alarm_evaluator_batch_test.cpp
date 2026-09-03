@@ -1,5 +1,5 @@
-#include "datastore/alarm_store.h"
-#include "service/alarm_evaluator.h"
+#include "data/datastore/alarm_store.h"
+#include "application/service/alarm_evaluator.h"
 
 #include <atomic>
 #include <chrono>
@@ -12,8 +12,8 @@
 #include <utility>
 #include <vector>
 
-#include "common/filesystem_compat.h"
-#include "common/sqlite_compat.h"
+#include "shared/common/filesystem_compat.h"
+#include "shared/common/sqlite_compat.h"
 
 namespace {
 

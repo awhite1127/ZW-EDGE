@@ -530,8 +530,8 @@
         // API 结构保持不变：刷新响应仍使用既有 text 字段；仅在前端把标准
         // 数字与其尾部单位拆成稳定节点，文本枚举值保持原样。
         function realtimePointDisplayParts(point, valid) {
-            if (!valid) return { value: "数据无效", unit: "" };
             const text = String(point && (point.value_text || point.text) || "-").trim();
+            if (!valid) return { value: text && text !== "-" ? text : "数据无效", unit: "" };
             let unit = String(point && point.unit || "").trim();
             if (!point || !point.value_text) {
                 const match = text.match(/^([-+]?(?:(?:\d{1,3}(?:,\d{3})+)|\d+)(?:\.\d+)?)(?:\s+(.+))?$/);

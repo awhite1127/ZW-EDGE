@@ -49,7 +49,7 @@ const (
 	// ntpd -gq 的后端超时为 45 秒，HTTP 写超时需覆盖完整 IPC 往返。
 	writeTimeout = 95 * time.Second
 	idleTimeout  = 60 * time.Second
-	// 后端不可达时的页面标题降级默认值，需要与 C++ backend/src/model/system_settings.h 保持同步。
+	// 后端不可达时的页面标题降级默认值，需要与 C++ backend/src/data/model/system_settings.h 保持同步。
 	defaultSystemDisplayName = "珠海知更通讯管理系统"
 )
 

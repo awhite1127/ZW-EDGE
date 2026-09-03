@@ -1,5 +1,5 @@
-#include "channel/bounded_address_resolver.h"
-#include "common/time_utils.h"
+#include "communication/channel/bounded_address_resolver.h"
+#include "shared/common/time_utils.h"
 
 #include <iostream>
 

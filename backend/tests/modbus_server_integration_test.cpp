@@ -14,11 +14,11 @@
 #include <system_error>
 #include <vector>
 
-#include "common/filesystem_compat.h"
-#include "datastore/config_store.h"
-#include "datastore/database_paths.h"
-#include "model/modbus_server.h"
-#include "service/backend_service.h"
+#include "shared/common/filesystem_compat.h"
+#include "data/datastore/config_store.h"
+#include "data/datastore/database_paths.h"
+#include "data/model/modbus_server.h"
+#include "application/service/backend_service.h"
 
 namespace {
 

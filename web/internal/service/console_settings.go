@@ -947,7 +947,7 @@ func (s *ConsoleService) ResetWebUserPassword(ctx context.Context, request model
 }
 
 func defaultSystemSettings() model.SystemSettings {
-	// 后端不可达时的页面降级默认值，需要与 C++ backend/src/model/system_settings.h 保持同步。
+	// 后端不可达时的页面降级默认值，需要与 C++ backend/src/data/model/system_settings.h 保持同步。
 	return model.SystemSettings{
 		DeviceName:   "边缘计算控制器",
 		SiteLocation: "未设置",

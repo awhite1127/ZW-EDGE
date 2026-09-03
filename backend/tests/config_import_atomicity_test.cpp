@@ -4,15 +4,15 @@
 #include <system_error>
 #include <utility>
 
-#include "common/filesystem_compat.h"
-#include "common/sqlite_compat.h"
-#include "datastore/alarm_store.h"
-#include "datastore/config_import_transaction.h"
-#include "datastore/config_store.h"
-#include "datastore/database_paths.h"
-#include "datastore/device_template_store.h"
-#include "model/builtin_device_templates.h"
-#include "model/device_template.h"
+#include "shared/common/filesystem_compat.h"
+#include "shared/common/sqlite_compat.h"
+#include "data/datastore/alarm_store.h"
+#include "data/datastore/config_import_transaction.h"
+#include "data/datastore/config_store.h"
+#include "data/datastore/database_paths.h"
+#include "data/datastore/device_template_store.h"
+#include "data/model/builtin_device_templates.h"
+#include "data/model/device_template.h"
 
 namespace {
 

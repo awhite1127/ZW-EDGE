@@ -3,7 +3,7 @@
 
     /*
      * 项目行业词的唯一前端配置源。
-     * 内容来自 backend/src/model/device_template.cpp 中 builtin_device_templates()
+     * 内容来自 backend/src/data/model/device_template.cpp 中 builtin_device_templates()
      * 注册的模板 ID、用户可见模板名称和字段显示名称。
      */
     window.EdgeKeyboardCommonWords = {

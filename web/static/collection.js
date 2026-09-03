@@ -608,7 +608,8 @@
         // 格式化点位数值、单位和质量状态。
         function pointDisplayValue(point) {
             if (point.valid === false) {
-                return "数据无效";
+                const statusText = typeof point.display_text === "string" ? point.display_text.trim() : "";
+                return statusText || "数据无效";
             }
             const key = point.key || "";
             if ((key === "current_status" || key === "motor_stop_time" || key === "last_test_time") && point.message) {

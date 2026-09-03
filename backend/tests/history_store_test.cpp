@@ -9,11 +9,11 @@
 #include <utility>
 #include <vector>
 
-#include "common/filesystem_compat.h"
-#include "common/sqlite_compat.h"
-#include "common/time_utils.h"
-#include "datastore/history_store.h"
-#include "model/data_item_keys.h"
+#include "shared/common/filesystem_compat.h"
+#include "shared/common/sqlite_compat.h"
+#include "shared/common/time_utils.h"
+#include "data/datastore/history_store.h"
+#include "data/model/data_item_keys.h"
 
 namespace edge_controller {
 

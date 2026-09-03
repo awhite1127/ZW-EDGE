@@ -982,7 +982,10 @@ func buildRealtimePointRows(snapshot model.DeviceRealtimeSnapshot, fields []mode
 		message := strings.TrimSpace(point.Message)
 		stateClass := "status-ok"
 		if !point.Valid {
-			text = "数据无效"
+			text = strings.TrimSpace(point.DisplayText)
+			if text == "" {
+				text = "数据无效"
+			}
 			valueText = text
 			unit = ""
 			if message == "" {
