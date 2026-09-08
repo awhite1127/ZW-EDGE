@@ -111,13 +111,11 @@ bool mqtt_start_failure_retryable(StatusCode status)
 
 }  // namespace
 
-// 构造 MqttPublisherService 实例。
 MqttPublisherService::MqttPublisherService()
     : MqttPublisherService(make_mqtt_client())
 {
 }
 
-// 构造 MqttPublisherService 实例。
 MqttPublisherService::MqttPublisherService(std::unique_ptr<MqttClient> client)
     : client_(std::move(client))
 {
@@ -129,7 +127,6 @@ MqttPublisherService::MqttPublisherService(std::unique_ptr<MqttClient> client)
         is_ok(client_->configure(settings_, &ignored_error));
 }
 
-// 销毁 MqttPublisherService 实例并释放相关资源。
 MqttPublisherService::~MqttPublisherService()
 {
     stop();
@@ -155,6 +152,9 @@ StatusCode MqttPublisherService::configure(
             (running_ || !settings.enabled)) {
             if (!same_system_settings(system_settings_, system_settings)) {
                 system_settings_ = system_settings;
+                for (const auto& item : durable_deliveries_)
+                    for (const auto sequence : item.second.sequences) if (client_) client_->forget_publish(sequence);
+                durable_deliveries_.clear();
                 ++configuration_generation_;
             }
             if (error_message != nullptr) {
@@ -168,6 +168,9 @@ StatusCode MqttPublisherService::configure(
     std::lock_guard<std::mutex> lock(mutex_);
     settings_ = settings;
     system_settings_ = system_settings;
+    for (const auto& item : durable_deliveries_)
+        for (const auto sequence : item.second.sequences) if (client_) client_->forget_publish(sequence);
+    durable_deliveries_.clear();
     ++configuration_generation_;
     sequence_ = 1;
     time_reconnect_requested_ = false;
@@ -256,6 +259,7 @@ void MqttPublisherService::stop()
     {
         std::lock_guard<std::mutex> lock(mutex_);
         running_ = false;
+        durable_deliveries_.clear();
         time_reconnect_requested_ = false;
         client_start_pending_ = false;
         if (client_ != nullptr) {
@@ -277,51 +281,50 @@ StatusCode MqttPublisherService::publish(
     return publish_locked(topic, payload, qos, retain, error_message, publish_sequence);
 }
 
-// 发布事件。
-void MqttPublisherService::publish_event(const ServiceEvent& event)
+bool MqttPublisherService::deliver_durable_event(const ServiceEvent& event)
 {
-    while (true) {
-        MqttSettings settings;
-        int qos = 0;
-        std::uint64_t configuration_generation = 0;
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            const auto runtime =
-                client_ == nullptr ? MqttRuntimeStatus{} : client_->runtime_status();
-            if (!runtime.enabled || !runtime.connected) {
-                return;
-            }
-            settings = mqtt_payload_settings(settings_);
-            qos = settings_.qos;
-            configuration_generation = configuration_generation_;
-        }
-
-        const auto topic = mqtt_event_topic(settings);
-        const auto payload = build_mqtt_event_payload(settings, event);
-        std::string publish_error;
-        StatusCode status = StatusCode::kInvalidState;
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (configuration_generation != configuration_generation_) {
-                continue;
-            }
-            const auto runtime =
-                client_ == nullptr ? MqttRuntimeStatus{} : client_->runtime_status();
-            if (!runtime.enabled || !runtime.connected) {
-                return;
-            }
-            status = publish_locked(topic, payload, qos, false, &publish_error);
-        }
-        if (!is_ok(status) && !publish_error.empty()) {
-            Logger::warn(publish_failure_log(
-                "MQTT 事件发布", topic, payload.size(), publish_error));
-        }
-        return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!settings_.enabled) { durable_deliveries_.erase(event.event_id); return true; }
+    if (!client_ || !client_configuration_valid_ || !client_->runtime_status().connected) return false;
+    if (durable_deliveries_.count(event.event_id) == 0 && durable_deliveries_.size() >= 128) return false;
+    auto& delivery = durable_deliveries_[event.event_id];
+    if (delivery.generation != configuration_generation_) {
+        for (const auto sequence : delivery.sequences) client_->forget_publish(sequence);
+        delivery = {};
     }
+    delivery.generation = configuration_generation_;
+    const auto count = event.source == "data_alarm" ? 2U : 1U;
+    const auto settings = mqtt_payload_settings(settings_);
+    bool complete = true;
+    for (std::size_t index = 0; index < count; ++index) {
+        if (!delivery.confirmed[index] && delivery.sequences[index] != 0)
+            delivery.confirmed[index] = client_->consume_publish_ack(delivery.sequences[index]);
+        if (delivery.confirmed[index]) continue;
+        complete = false;
+        if (delivery.sequences[index] != 0) continue;
+        const auto sequence = (1ULL << 63) | sequence_++;
+        const auto topic = index == 0 ? mqtt_event_topic(settings) : mqtt_alarm_topic(settings);
+        const auto payload = index == 0 ? build_mqtt_event_payload(settings, event) : build_mqtt_alarm_payload(settings, event);
+        // 关键事件至少 QoS 1，确认前持久化 outbox 不删除；接收方按 event_id 去重。
+        if (is_ok(publish_locked(topic, payload, std::max(1, settings_.qos), false, nullptr, sequence)))
+            delivery.sequences[index] = sequence;
+    }
+    if (complete) durable_deliveries_.erase(event.event_id);
+    return complete;
 }
 
-// 发布告警。
+void MqttPublisherService::publish_event(const ServiceEvent& event)
+{
+    publish_service_event(event, false);
+}
+
 void MqttPublisherService::publish_alarm(const ServiceEvent& event)
+{
+    publish_service_event(event, true);
+}
+
+// 锁外编码载荷，锁内校验配置世代，保证不会经新客户端发送旧配置的消息。
+void MqttPublisherService::publish_service_event(const ServiceEvent& event, bool alarm)
 {
     while (true) {
         MqttSettings settings;
@@ -339,8 +342,9 @@ void MqttPublisherService::publish_alarm(const ServiceEvent& event)
             configuration_generation = configuration_generation_;
         }
 
-        const auto topic = mqtt_alarm_topic(settings);
-        const auto payload = build_mqtt_alarm_payload(settings, event);
+        const auto topic = alarm ? mqtt_alarm_topic(settings) : mqtt_event_topic(settings);
+        const auto payload = alarm ? build_mqtt_alarm_payload(settings, event)
+                                   : build_mqtt_event_payload(settings, event);
         std::string publish_error;
         StatusCode status = StatusCode::kInvalidState;
         {
@@ -357,7 +361,7 @@ void MqttPublisherService::publish_alarm(const ServiceEvent& event)
         }
         if (!is_ok(status) && !publish_error.empty()) {
             Logger::warn(publish_failure_log(
-                "MQTT 告警发布", topic, payload.size(), publish_error));
+                alarm ? "MQTT 告警发布" : "MQTT 事件发布", topic, payload.size(), publish_error));
         }
         return;
     }

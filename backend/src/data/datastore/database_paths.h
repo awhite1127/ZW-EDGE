@@ -15,7 +15,7 @@ namespace edge_controller {
 // 三个数据库互不 ATTACH，只通过业务逻辑 ID 关联。
 class DatabasePaths {
 public:
-    // 构造 DatabasePaths 实例。
+
     explicit DatabasePaths(const std::string& data_directory)
         : data_directory_(data_directory.empty() ? default_data_directory() : data_directory)
     {

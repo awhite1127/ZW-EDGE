@@ -14,8 +14,7 @@ import (
 	"edge-web/internal/model"
 )
 
-// LoadRealtime 优先使用后端原子快照；部分接口失败时保留配置行并标记状态未知，
-// 避免短暂 IPC 故障让设备从页面消失。
+// LoadRealtime 使用后端原子快照，配置决定设备清单，点位和健康状态来自同一仓库投影。
 func (s *ConsoleService) LoadRealtime(ctx context.Context) model.RealtimeLoadResult {
 	// 原子快照是实时页的主数据源，获取失败时直接返回不可达状态。
 	snapshot, snapshotErr := s.backend.GetRealtimeViewSnapshot(ctx)
@@ -68,22 +67,12 @@ func (s *ConsoleService) LoadRealtime(ctx context.Context) model.RealtimeLoadRes
 		channelByID[channel.ChannelID] = channel
 	}
 
-	// 优先按设备配置构造行；配置为空时退回状态清单，避免丢失运行中设备。
-	var rows []model.RealtimeRow
-	rows = make([]model.RealtimeRow, 0, len(devices))
+	// 配置是设备存在性的权威来源；残留状态不能重新创造已删除的设备。
+	rows := make([]model.RealtimeRow, 0, len(devices))
 	for _, device := range devices {
 		status, hasStatus := statusByID[device.DeviceID]
 		snapshot, hasRealtime := realtimeByID[device.DeviceID]
-		hasRealtime = realtimeSnapshotMatchesStatus(snapshot, hasRealtime, status, hasStatus)
 		rows = append(rows, buildRealtimeRowFromConfig(device, status, hasStatus, snapshot, hasRealtime, masterByID, channelByID, deviceTemplates, templatesAvailable))
-	}
-	if len(rows) == 0 && len(systemStatus.DeviceStatusList) > 0 {
-		rows = make([]model.RealtimeRow, 0, len(systemStatus.DeviceStatusList))
-		for _, status := range systemStatus.DeviceStatusList {
-			snapshot, hasRealtime := realtimeByID[status.DeviceID]
-			hasRealtime = realtimeSnapshotMatchesStatus(snapshot, hasRealtime, status, true)
-			rows = append(rows, buildRealtimeRowFromStatus(status, snapshot, hasRealtime, masterByID, channelByID, deviceTemplates, templatesAvailable))
-		}
 	}
 	// 合并活动告警，并清理后端诊断中不适合直接展示的限制文本。
 	if alarmsErr == nil {
@@ -157,27 +146,6 @@ func validRealtimeSnapshot(snapshot model.DeviceRealtimeSnapshot) bool {
 	return snapshot.HasResistance &&
 		snapshot.Resistance != nil &&
 		snapshot.Resistance.SampleTimeMS > 0
-}
-
-// realtimeSnapshotMatchesStatus 汇总并返回当前展示状态。
-func realtimeSnapshotMatchesStatus(
-	snapshot model.DeviceRealtimeSnapshot,
-	hasRealtime bool,
-	status model.DeviceStatus,
-	hasStatus bool,
-) bool {
-	if !hasRealtime || !validRealtimeSnapshot(snapshot) {
-		return false
-	}
-	if !hasStatus {
-		return false
-	}
-	if status.UpdatedAtMS > 0 && snapshot.SampleTimeMS >= status.UpdatedAtMS {
-		return true
-	}
-	return status.LastCollectSuccess &&
-		status.LastSuccessTimeMS > 0 &&
-		snapshot.SampleTimeMS >= status.LastSuccessTimeMS
 }
 
 // BuildRealtimeResponse 构建实时数据响应。
@@ -759,33 +727,6 @@ func isGenericRealtimeRowMessage(message string) bool {
 	default:
 		return false
 	}
-}
-
-// buildRealtimeRowFromStatus 汇总并返回当前展示状态。
-func buildRealtimeRowFromStatus(
-	status model.DeviceStatus,
-	snapshot model.DeviceRealtimeSnapshot,
-	hasRealtime bool,
-	masterByID map[string]model.MasterNodeConfig,
-	channelByID map[string]model.ChannelConfig,
-	deviceTemplates []model.DeviceTemplateDefinition,
-	templatesAvailable bool,
-) model.RealtimeRow {
-	return buildRealtimeRowFromConfig(
-		model.DeviceConfig{
-			DeviceID:   status.DeviceID,
-			DeviceName: status.DeviceName,
-			MasterID:   status.MasterID,
-		},
-		status,
-		true,
-		snapshot,
-		hasRealtime,
-		masterByID,
-		channelByID,
-		deviceTemplates,
-		templatesAvailable,
-	)
 }
 
 // realtimeTemplateInfo 汇总并返回当前展示状态。

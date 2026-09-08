@@ -1,3 +1,4 @@
+#include "communication/collect/transport_diagnosis.h"
 // Modbus 写执行器负责受控 FC10 写入、请求校验和回读结果组织，避免页面层拼装协议帧。
 #include "communication/collect/modbus_write_executor.h"
 
@@ -26,21 +27,8 @@ DiagnosisErrorCode diagnosis_from_rtu_channel_status(
     const std::string& error_message,
     StatusCode transport_status)
 {
-    if (transport_status == StatusCode::kTimeout) {
-        return DiagnosisErrorCode::kModbusTimeout;
-    }
-    if (channel_status.diagnosis.error_code == to_string(DiagnosisErrorCode::kChannelOpenFailed)) {
-        return DiagnosisErrorCode::kChannelOpenFailed;
-    }
-    if (channel_status.diagnosis.error_code == to_string(DiagnosisErrorCode::kChannelConfigFailed)) {
-        return DiagnosisErrorCode::kChannelConfigFailed;
-    }
-    if (channel_status.diagnosis.error_code == to_string(DiagnosisErrorCode::kChannelIoError)) {
-        return DiagnosisErrorCode::kChannelIoError;
-    }
-
-    const auto classified = classify_channel_error(error_message);
-    return classified == DiagnosisErrorCode::kUnknownError ? DiagnosisErrorCode::kChannelIoError : classified;
+    (void)error_message;
+    return transport_diagnosis(transport_status, channel_status, false);
 }
 
 // 记录 Modbus 寄存器写入结果。
@@ -218,11 +206,11 @@ ModbusWriteMultipleRegistersResult ModbusWriteExecutor::write_multiple_holding_r
         start_register,
         result.register_count,
         result.response_frame,
-        &parse_error);
+        &parse_error, &result.diagnosis_error_code);
     if (!is_ok(parse_status)) {
         result.transport_status = parse_status;
         result.error_message = parse_error;
-        result.diagnosis_error_code = classify_modbus_error(parse_error);
+
         append_modbus_trace(
             communication_trace_store_,
             master_config,

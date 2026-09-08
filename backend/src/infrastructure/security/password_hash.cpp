@@ -180,7 +180,7 @@ Sha256Digest sha256(const std::uint8_t* data, std::size_t length)
 
 class HmacSha256 {
 public:
-    // 构造 HmacSha256 实例。
+
     explicit HmacSha256(const std::string& key)
     {
         std::array<std::uint8_t, kSha256BlockSize> normalized_key{};

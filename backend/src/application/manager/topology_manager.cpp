@@ -5,7 +5,6 @@
 
 namespace edge_controller {
 
-// 构造 TopologyManager 实例。
 TopologyManager::TopologyManager(TopologyManager&& other) noexcept
 {
     move_from(std::move(other));

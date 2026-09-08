@@ -10,7 +10,7 @@ using namespace config_store_internal;
 
 namespace {
 
-constexpr int kCurrentDatabaseVersion = 9;
+constexpr int kCurrentDatabaseVersion = 10;
 
 // 判断数据库表是否包含指定列。
 StatusCode table_column_exists(
@@ -55,7 +55,7 @@ StatusCode validate_clean_database_baseline(sqlite3* database, std::string* erro
         return StatusCode::kIoError;
     }
     const auto version = sqlite3_column_int(version_statement.get(), 0);
-    if (version == kCurrentDatabaseVersion) {
+    if (version == kCurrentDatabaseVersion || version == 9) {
         return StatusCode::kOk;
     }
     if (version == 0) {
@@ -98,8 +98,8 @@ StatusCode ConfigStore::initialize_schema_locked(std::string* error_message)
             }
             return StatusCode::kIoError;
         }
-        const auto database_version = sqlite3_column_int(version_statement.get(), 0);
-        if (database_version == kCurrentDatabaseVersion) {
+        auto database_version = sqlite3_column_int(version_statement.get(), 0);
+        if (database_version == kCurrentDatabaseVersion || database_version == 9) {
             Statement tables_statement(
                 database_,
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ("
@@ -107,14 +107,14 @@ StatusCode ConfigStore::initialize_schema_locked(std::string* error_message)
                 "'web_users','channels','masters','device_templates','device_template_fields',"
                 "'device_template_read_blocks','device_template_enum_items',"
                 "'alarm_rules','alarm_runtime_states','device_aliases','modbus_server_settings',"
-                "'modbus_register_mappings');");
+                "'modbus_register_mappings','alarm_event_outbox');");
             if (!tables_statement.ok() || sqlite3_step(tables_statement.get()) != SQLITE_ROW) {
                 if (error_message != nullptr) {
                     *error_message = "检查 edge-config.db 当前结构失败：" + sqlite_error(database_);
                 }
                 return StatusCode::kIoError;
             }
-            if (sqlite3_column_int(tables_statement.get(), 0) != 17) {
+            if (sqlite3_column_int(tables_statement.get(), 0) != (database_version == 9 ? 17 : 18)) {
                 if (error_message != nullptr) {
                     *error_message = schema_migration_required_message(
                         "edge-config.db 缺少当前正式数据表，判定为异常数据库");
@@ -147,6 +147,16 @@ StatusCode ConfigStore::initialize_schema_locked(std::string* error_message)
                         "edge-config.db 缺少读取区块、地址跨度、设备数量或单比特字段列");
                 }
                 return StatusCode::kInvalidState;
+            }
+            if (database_version == 9) {
+                auto migration = execute_sql_locked("BEGIN IMMEDIATE;", error_message);
+                if (is_ok(migration)) migration = execute_sql_locked(
+                    "CREATE TABLE alarm_event_outbox(sequence INTEGER PRIMARY KEY AUTOINCREMENT,"
+                    "event_id TEXT NOT NULL UNIQUE,payload TEXT NOT NULL);"
+                    "PRAGMA user_version=10;", error_message);
+                if (is_ok(migration)) migration = execute_sql_locked("COMMIT;", error_message);
+                if (!is_ok(migration)) { execute_sql_locked("ROLLBACK;", nullptr); return migration; }
+                database_version = 10;
             }
             return StatusCode::kOk;
         }
@@ -338,6 +348,7 @@ StatusCode ConfigStore::initialize_schema_locked(std::string* error_message)
         "PRIMARY KEY(device_id,point_key)"
         ");"
         "CREATE INDEX IF NOT EXISTS idx_alarm_rules_device ON alarm_rules(device_id);"
+        "CREATE TABLE IF NOT EXISTS alarm_event_outbox(sequence INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT NOT NULL UNIQUE,payload TEXT NOT NULL);"
         "CREATE TABLE IF NOT EXISTS alarm_runtime_states("
         "device_id TEXT NOT NULL,point_key TEXT NOT NULL,state TEXT NOT NULL,direction TEXT NOT NULL,"
         "current_value REAL NOT NULL,threshold_value REAL NOT NULL,consecutive_trigger_count INTEGER NOT NULL,"
@@ -389,7 +400,7 @@ StatusCode ConfigStore::initialize_schema_locked(std::string* error_message)
             error_message);
     }
     if (is_ok(status)) {
-        status = execute_sql_locked("PRAGMA user_version = 9;", error_message);
+        status = execute_sql_locked("PRAGMA user_version = 10;", error_message);
     }
     if (is_ok(status)) {
         status = execute_sql_locked("COMMIT;", error_message);

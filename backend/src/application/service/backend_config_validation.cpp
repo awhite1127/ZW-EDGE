@@ -613,23 +613,8 @@ ChannelConfig build_updated_channel_config(
     const ChannelConfig& current,
     const ChannelConfigUpdateRequest& request)
 {
-    ChannelConfig updated = current;
-    updated.channel_name = trim_copy(request.channel_name);
-    updated.enabled = request.enabled;
-    updated.channel_type = request.channel_type;
-
-    const auto port_name = trim_copy(request.port_name);
-    updated.device_path = port_name;
-    updated.port_name = port_name;
-    updated.baud_rate = request.baud_rate;
-    updated.data_bits = request.data_bits;
-    updated.parity = request.parity;
-    updated.stop_bits = request.stop_bits;
-    updated.response_timeout_ms = request.response_timeout_ms;
-    updated.retry_count = request.retry_count;
-    updated.tcp_host = trim_copy(request.tcp_host);
-    updated.tcp_port = request.tcp_port == 0 ? 502 : request.tcp_port;
-    updated.connect_timeout_ms = request.connect_timeout_ms == 0 ? 3000 : request.connect_timeout_ms;
+    auto updated = build_new_channel_config(request);
+    updated.channel_id = current.channel_id;
     return updated;
 }
 
@@ -807,10 +792,9 @@ StatusCode validate_master_update_request_with_templates(
 
 // 合并现有配置与请求，构造更新后的主站配置。
 MasterNodeConfig build_updated_master_config(
-    const MasterNodeConfig* current,
     const MasterNodeConfigUpdateRequest& request)
 {
-    MasterNodeConfig updated = current != nullptr ? *current : MasterNodeConfig{};
+    MasterNodeConfig updated;
     updated.master_id = trim_copy(request.master_id);
     updated.master_name = trim_copy(request.master_name);
     updated.enabled = request.enabled;

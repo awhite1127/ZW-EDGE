@@ -19,7 +19,7 @@ class TopologyManager {
 public:
     // 禁止复制拓扑管理器。
     TopologyManager() = default;
-    // 构造 TopologyManager 实例。
+
     TopologyManager(const TopologyManager&) = delete;
     // 禁止复制赋值拓扑管理器。
     TopologyManager& operator=(const TopologyManager&) = delete;

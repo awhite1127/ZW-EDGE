@@ -83,12 +83,7 @@ const char* to_string(DiagnosisErrorCode error_code);
 
 // 返回诊断错误码对应的稳定定义。
 const DiagnosisDefinition& diagnosis_definition(DiagnosisErrorCode error_code);
-// 分类通道错误信息。
-DiagnosisErrorCode classify_channel_error(const std::string& raw_message);
-// 分类Modbus错误信息。
-DiagnosisErrorCode classify_modbus_error(const std::string& raw_message);
-// 分类运行状态错误信息。
-DiagnosisErrorCode classify_runtime_error(const std::string& raw_message);
+DiagnosisErrorCode diagnosis_code_from_string(const std::string& code);
 // 判断诊断状态是否包含有效问题。
 bool diagnosis_has_issue(const DiagnosisStatus& diagnosis);
 // 返回诊断状态的严重程度排序值。

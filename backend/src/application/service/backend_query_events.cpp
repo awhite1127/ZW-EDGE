@@ -33,8 +33,8 @@ void BackendService::clear_channel_communication_traces(const ChannelId& channel
 PollingCycleSummary BackendService::get_recent_polling_summary() const
 {
     std::shared_lock<std::shared_mutex> lock(service_mutex_);
-    if (polling_service_ != nullptr) {
-        return polling_service_->get_last_cycle_summary();
+    if (polling_runtime_.get() != nullptr) {
+        return polling_runtime_.get()->get_last_cycle_summary();
     }
     return data_store_.get_polling_summary();
 }

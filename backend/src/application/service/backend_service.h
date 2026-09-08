@@ -49,7 +49,9 @@
 #include "communication/modbus_server/modbus_register_bank.h"
 #include "communication/modbus_server/modbus_server_runtime_status.h"
 #include "communication/modbus_server/modbus_tcp_server.h"
-#include "application/service/polling_service.h"
+#include "application/service/polling_runtime.h"
+#include "application/service/runtime_config_compiler.h"
+#include "application/service/update_service.h"
 #include "application/service/alarm_evaluator.h"
 #include "application/service/serial_port_enumerator.h"
 #include "infrastructure/platform/linux_time_runtime.h"
@@ -60,13 +62,13 @@ namespace edge_controller {
 // Web / IPC 通过这一层访问配置、状态、轮询、实时数据和历史事件。
 class BackendService {
 public:
-    // 销毁 BackendService 实例并释放相关资源。
+
     ~BackendService();
-    // 构造 BackendService 实例。
+
     BackendService() = default;
-    // 禁止复制后端服务实例。
+
     BackendService(const BackendService&) = delete;
-    // 禁止复制赋值后端服务实例。
+
     BackendService& operator=(const BackendService&) = delete;
 
     // 从唯一 SQLite 数据目录初始化后端服务、存储和运行态。
@@ -137,7 +139,7 @@ public:
     NetworkRuntimeStatus get_network_runtime_status() const;
     // 获取 MQTT 北向配置。
     MqttSettings get_mqtt_settings() const;
-    // 更新 MQTT 北向配置并刷新 MQTT 服务骨架状态。
+    // 更新 MQTT 北向配置并应用 MQTT 发布配置。
     StatusCode update_mqtt_settings(
         const MqttSettingsUpdateRequest& request,
         MqttSettingsUpdateResult* result,
@@ -458,23 +460,17 @@ public:
     StatusCode request_factory_reset(FactoryResetResult* result, std::string* error_message = nullptr);
 
 private:
+    void deliver_alarm_event(const ServiceEvent& event);
+    std::mutex alarm_delivery_mutex_;
+    StatusCode write_multiple_holding_registers_locked(
+        const ModbusWriteMultipleRegistersRequest& request,
+        ModbusWriteMultipleRegistersResponse* response,
+        std::string* error_message);
     struct ConfigApplyOutcome {
         std::string message;
         std::string warning_message;
         bool polling_restarted{false};
     };
-    struct PreparedRuntimeConfig {
-        SystemConfig system_config;
-        TopologyManager topology_manager;
-        ChannelManager channel_manager;
-        ChannelOpenSummary channel_open_summary;
-    };
-
-    // 仅供受控设备命令内部执行 FC10，不对 IPC/Web 暴露裸寄存器写入口。
-    StatusCode write_multiple_holding_registers(
-        const ModbusWriteMultipleRegistersRequest& request,
-        ModbusWriteMultipleRegistersResponse* response,
-        std::string* error_message = nullptr);
 
     // 仅供 EM100 事件/测试记录命令读取设备协议规定的显式 FC03 地址范围。
     // 该维护命令不代表“按设备类型即时读取”；通用设备读取必须走 read_blocks 多区块模型。
@@ -493,13 +489,13 @@ private:
     // 在持锁状态下启动轮询。
     StatusCode start_polling_locked(std::string* error_message = nullptr);
     // 在持锁状态下分离当前轮询服务实例。
-    std::unique_ptr<PollingService> detach_polling_service_locked(
+    std::shared_ptr<PollingService> detach_polling_service_locked(
         const std::string& polling_state,
         const std::string& status_message);
     // 停止轮询用于配置应用。
     void stop_polling_for_config_apply(
         std::unique_lock<std::shared_mutex>& lock,
-        std::unique_ptr<PollingService>* polling_to_stop);
+        std::shared_ptr<PollingService>* polling_to_stop);
     // 在持锁状态下合并已停止轮询服务的最终状态。
     void merge_stopped_polling_service_locked(
         const PollingService* stopped_service,
@@ -523,7 +519,6 @@ private:
     // 执行内部配置加载流程。
     StatusCode load_config_internal(std::vector<std::string>* errors);
     // 准备运行状态配置。
-    StatusCode prepare_runtime_config(PreparedRuntimeConfig* prepared, std::vector<std::string>* errors);
     // 在持锁状态下应用已准备运行状态配置。
     void apply_prepared_runtime_config_locked(PreparedRuntimeConfig&& prepared);
     // 重新加载配置用于应用。
@@ -553,47 +548,23 @@ private:
         const MasterNodeConfig** master,
         std::size_t* index,
         std::string* error_message) const;
-    // 在持锁状态下读取并校验设备配置内列表。
-    StatusCode require_device_config_in_list_locked(
-        const std::vector<DeviceConfig>& devices,
-        const DeviceId& device_id,
-        std::size_t* index,
-        std::string* error_message) const;
-
     // 配置唯一性校验。
     StatusCode ensure_channel_id_available_locked(const ChannelId& channel_id, std::string* error_message) const;
 
-    // 设备同步辅助。
-    StatusCode sync_devices_for_configs_locked(
-        const std::vector<MasterNodeConfig>& masters,
-        std::vector<DeviceConfig>* devices,
-        std::vector<std::string>* errors) const;
     // 在持锁状态下按主站配置同步自动推导设备。
     StatusCode sync_devices_for_master_configs_locked(
         const std::vector<MasterNodeConfig>& masters,
-        std::vector<DeviceConfig>* devices,
+        std::vector<DeviceConfig>& devices,
         std::string* error_message) const;
-    // 在持锁状态下校验同步后的自动推导设备。
-    StatusCode validate_synced_auto_devices_locked(
-        const SystemConfig& config,
-        std::vector<std::string>* errors) const;
-
     // 配置保存与运行态刷新。
-    StatusCode write_channels_and_reload_locked(
+    StatusCode apply_channel_configs_locked(
         std::unique_lock<std::shared_mutex>& lock,
         const std::vector<ChannelConfig>& channels,
-        bool restore_polling,
         std::string* error_message);
     // 在持锁状态下写入 SQLite 主站配置并重新加载运行态。
     StatusCode write_sqlite_masters_and_reload_locked(
         std::unique_lock<std::shared_mutex>& lock,
         const std::vector<MasterNodeConfig>& masters,
-        bool restore_polling,
-        std::string* error_message);
-    // 在持锁状态下重新加载运行状态之后配置写入。
-    StatusCode reload_runtime_after_config_write_locked(
-        std::unique_lock<std::shared_mutex>& lock,
-        const std::string& reload_error_fallback,
         bool restore_polling,
         std::string* error_message);
     // 应用网络设置内部。
@@ -625,8 +596,6 @@ private:
         const std::string& detail,
         TimestampMs timestamp_ms,
         const DiagnosisStatus& diagnosis = DiagnosisStatus{});
-    // 将已生成但暂未持久化的一次性告警事件加入有界内存队列。
-    void enqueue_pending_event(ServiceEvent event);
     // 在现有数据维护线程中重试已生成事件，不重新执行告警状态机。
     void retry_pending_events();
     // 持久化成功后统一执行一次 MQTT 事件发布。
@@ -665,17 +634,11 @@ private:
     mutable std::mutex time_monitor_mutex_;
     mutable std::mutex time_adjustment_mutex_;
     mutable std::mutex maintenance_mutex_;
-    mutable std::mutex pending_event_mutex_;
     // 序列化可能并发触发的 Server 设置应用、映射重载和关闭动作。
     mutable std::mutex modbus_management_mutex_;
     std::condition_variable time_monitor_wakeup_;
     mutable std::mutex data_maintenance_thread_mutex_;
     std::condition_variable data_maintenance_wakeup_;
-
-    struct PendingEventRetry {
-        std::uint64_t retry_id{0};
-        ServiceEvent event;
-    };
 
     bool initialized_{false};
     SystemConfig system_config_{};
@@ -687,6 +650,7 @@ private:
     EventStore event_store_{};
     AlarmEvaluator alarm_evaluator_{};
     ConfigStore config_store_{};
+    RuntimeConfigCompiler runtime_config_compiler_{config_store_};
     DeviceTemplateStore device_template_store_{};
     CommunicationTraceStore communication_trace_store_{};
     MqttPublisherService mqtt_publisher_service_{};
@@ -698,6 +662,7 @@ private:
     ChannelManager channel_manager_{};
     TopologyManager topology_manager_{};
     SerialPortEnumerator serial_port_enumerator_{};
+    UpdateService update_service_{};
     LinuxTimeRuntime time_runtime_{};
     TimeJumpDetector time_jump_detector_{};
     std::thread time_monitor_thread_{};
@@ -707,13 +672,9 @@ private:
     std::string last_time_adjustment_source_;
     TimestampMs last_time_adjustment_after_ms_{0};
     std::int64_t last_time_adjustment_delta_ms_{0};
-    std::unique_ptr<PollingService> polling_service_{};
-    // 轮询对象被临时摘出并在锁外停止时仍用于时间跳变历史状态复位。
-    PollingService* history_sampling_service_{nullptr};
+    PollingRuntime polling_runtime_{};
     std::atomic_bool config_apply_in_progress_{false};
     std::atomic_bool event_persistence_suppressed_{false};
-    std::deque<PendingEventRetry> pending_event_retries_{};
-    std::uint64_t next_pending_event_retry_id_{1};
     DataMaintenanceSummary data_maintenance_summary_{};
     ServiceErrorSummary last_error_summary_{};
 };

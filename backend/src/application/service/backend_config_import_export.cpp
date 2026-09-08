@@ -109,12 +109,12 @@ struct ValidatedImportPayload {
 
 class ScopedEventPersistenceSuppression {
 public:
-    // 构造 ScopedEventPersistenceSuppression 实例。
+
     explicit ScopedEventPersistenceSuppression(std::atomic_bool& flag) : flag_(flag)
     {
         flag_.store(true);
     }
-    // 销毁 ScopedEventPersistenceSuppression 实例并释放相关资源。
+
     ~ScopedEventPersistenceSuppression() { flag_.store(false); }
 
 private:
@@ -291,7 +291,7 @@ StatusCode validate_import_bundle(
             }
             return StatusCode::kInvalidArgument;
         }
-        config_for_masters.master_nodes.push_back(build_updated_master_config(nullptr, request));
+        config_for_masters.master_nodes.push_back(build_updated_master_config(request));
     }
     payload->masters = config_for_masters.master_nodes;
 
@@ -396,7 +396,7 @@ StatusCode BackendService::import_system_config(
 {
     std::unique_lock<std::mutex> modbus_management_lock(modbus_management_mutex_);
     std::lock_guard<std::mutex> time_operation_lock(time_service_mutex_);
-    std::unique_ptr<PollingService> polling_to_stop;
+    std::shared_ptr<PollingService> polling_to_stop;
     std::unique_lock<std::shared_mutex> lock(service_mutex_);
     const auto ready_status =
         ensure_config_mutation_ready_locked("缺少配置导入结果输出参数", result, error_message);
@@ -449,6 +449,7 @@ StatusCode BackendService::import_system_config(
 
     // 配置包导入不得写 edge-history.db 或 edge-events.db。
     ScopedEventPersistenceSuppression suppress_events(event_persistence_suppressed_);
+    std::unique_lock<std::mutex> alarm_delivery_guard(alarm_delivery_mutex_);
 
     MqttSettings next_mqtt = validated.mqtt_settings;
     next_mqtt.password = system_config_.mqtt_settings.password;
@@ -604,7 +605,7 @@ StatusCode BackendService::import_system_config(
             validated.modbus_server_settings, std::move(bank), &modbus_apply_error);
     }
     if (!is_ok(modbus_apply_status)) {
-        std::unique_ptr<PollingService> imported_polling_to_stop;
+        std::shared_ptr<PollingService> imported_polling_to_stop;
         {
             std::unique_lock<std::shared_mutex> write_lock(service_mutex_);
             if (is_polling_running_locked()) {

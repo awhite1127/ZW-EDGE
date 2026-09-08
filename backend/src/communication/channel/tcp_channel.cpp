@@ -143,7 +143,6 @@ bool wait_for_fd_until(
 
 }  // namespace
 
-// 构造 TcpChannel 实例。
 TcpChannel::TcpChannel(
     ChannelConfig config,
     channel_internal::AddressResolverFunction resolver)
@@ -162,7 +161,6 @@ TcpChannel::TcpChannel(
         0);
 }
 
-// 销毁 TcpChannel 实例并释放相关资源。
 TcpChannel::~TcpChannel()
 {
     close();

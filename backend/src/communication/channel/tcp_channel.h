@@ -19,11 +19,11 @@ namespace edge_controller {
 // 基于 POSIX socket 的 Modbus TCP 通道。
 class TcpChannel : public IChannel {
 public:
-    // 构造 TcpChannel 实例。
+
     explicit TcpChannel(
         ChannelConfig config,
         channel_internal::AddressResolverFunction resolver = nullptr);
-    // 销毁 TcpChannel 实例并释放相关资源。
+
     ~TcpChannel() override;
 
     // 打开 Modbus TCP socket 连接。

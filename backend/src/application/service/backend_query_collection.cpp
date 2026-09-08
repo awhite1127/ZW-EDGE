@@ -124,6 +124,7 @@ StatusCode BackendService::update_device_display_name(
     }
 
     found->device_name = normalized_name.empty() ? found->generated_name : normalized_name;
+    data_store_.update_device_names(system_config_.devices);
     topology_manager_.rebind_system_config(system_config_);
     if (auto status = data_store_.get_device_status(device_id); status.has_value()) {
         status->device_name = found->device_name;
@@ -209,6 +210,7 @@ StatusCode BackendService::update_device_display_names_batch(
     for (const auto& update : pending) {
         auto& device = system_config_.devices[update.device_index];
         device.device_name = update.display_name.empty() ? device.generated_name : update.display_name;
+        data_store_.update_device_names({device});
         if (auto status = data_store_.get_device_status(device.device_id); status.has_value()) {
             status->device_name = device.device_name;
             data_store_.update_device_status(*status);

@@ -38,14 +38,12 @@ public:
     // 返回非零 errno 可在指定监听操作注入失败；仅供状态机故障测试在 start 前配置。
     using ListenerFaultInjector = std::function<int(const std::string&)>;
 
-    // 禁止复制后端 IPC 服务实例。
     BackendIpcServer(BackendService* backend_service, std::string socket_path);
-    // 销毁 BackendIpcServer 实例并释放相关资源。
+
     ~BackendIpcServer();
 
-    // 构造 BackendIpcServer 实例。
     BackendIpcServer(const BackendIpcServer&) = delete;
-    // 禁止复制赋值后端 IPC 服务实例。
+
     BackendIpcServer& operator=(const BackendIpcServer&) = delete;
 
     // 启动 IPC 监听线程和客户端工作线程。

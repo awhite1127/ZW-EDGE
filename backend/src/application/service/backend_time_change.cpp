@@ -68,9 +68,9 @@ void BackendService::handle_system_time_changed(
     TimeAdjustmentHandlingResult handling;
     {
         std::unique_lock<std::shared_mutex> lock(service_mutex_);
-        if (history_sampling_service_ != nullptr) {
+        if (const auto sampling = polling_runtime_.history_service()) {
             handling.discarded_pending_history_records =
-                history_sampling_service_->on_system_time_adjusted(adjustment.after_time_ms);
+                sampling->on_system_time_adjusted(adjustment.after_time_ms);
             handling.history_state_reset = true;
         }
     }

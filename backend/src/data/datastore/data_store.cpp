@@ -1,5 +1,7 @@
 // 内存运行态仓库：在采集线程与 IPC 查询之间提供带锁快照，不负责持久化历史数据。
 #include "data/datastore/data_store.h"
+#include <algorithm>
+#include "shared/common/time_utils.h"
 
 #include "data/model/data_item_keys.h"
 
@@ -63,29 +65,9 @@ DeviceRealtimeSnapshot build_realtime_snapshot(const DeviceStatus& status)
     return snapshot;
 }
 
-// 判断是否存在有效性实时数据值。
-bool has_valid_realtime_value(const DeviceStatus& status)
+bool has_realtime_sample(const DeviceStatus& status)
 {
-    if (status.updated_at_ms == 0) {
-        return false;
-    }
-    if (status.last_collect_success && (!status.points.empty() || status.has_resistance)) {
-        return true;
-    }
-    for (const auto& point : status.points) {
-        if (point.sample_time_ms == status.updated_at_ms) {
-            return true;
-        }
-    }
-    return false;
-}
-
-// 判断实时数据快照是否包含有效采样。
-bool is_valid_realtime_snapshot(const DeviceRealtimeSnapshot& snapshot)
-{
-    return snapshot.sample_time_ms > 0 &&
-           (!snapshot.points.empty() ||
-           (snapshot.has_resistance && snapshot.resistance.sample_time_ms > 0));
+    return status.updated_at_ms > 0 && (!status.points.empty() || status.has_resistance);
 }
 
 // 实时页面会从 DeviceRealtimeSnapshot 取得点位；健康投影只复制诊断与状态字段，
@@ -155,7 +137,7 @@ void DataStore::initialize(const SystemConfig& system_config)
     channel_status_by_id_.clear();
     master_status_by_id_.clear();
     device_status_by_id_.clear();
-    device_realtime_by_id_.clear();
+    device_names_.clear();
     device_ids_by_master_.clear();
     channel_status_index_by_id_.clear();
     master_status_index_by_id_.clear();
@@ -183,7 +165,10 @@ void DataStore::initialize(const SystemConfig& system_config)
         channel_order_.push_back(channel.channel_id);
     }
 
+    freshness_deadlines_.clear();
+    freshness_ttl_by_master_.clear();
     for (const auto& master : system_config.master_nodes) {
+        freshness_ttl_by_master_[master.master_id] = std::max<TimestampMs>(3000, 3ULL * master.poll_interval_ms);
         MasterNodeStatus status;
         status.master_id = master.master_id;
         status.diagnosis = make_normal_diagnosis(
@@ -198,6 +183,7 @@ void DataStore::initialize(const SystemConfig& system_config)
     }
 
     for (const auto& device : system_config.devices) {
+        device_names_[device.device_id] = device.device_name;
         DeviceStatus status;
         status.device_id = device.device_id;
         status.device_name = device.device_name;
@@ -214,6 +200,39 @@ void DataStore::initialize(const SystemConfig& system_config)
     }
 
     rebuild_system_status_locked();
+}
+
+void DataStore::update_device_names(const std::vector<DeviceConfig>& devices)
+{
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+    for (const auto& device : devices) {
+        device_names_[device.device_id] = device.device_name;
+        const auto current = device_status_by_id_.find(device.device_id);
+        if (current != device_status_by_id_.end()) {
+            auto status = current->second;
+            status.device_name = device.device_name;
+            update_device_status_locked(status);
+        }
+    }
+}
+
+void DataStore::reconcile_channels(const std::vector<ChannelConfig>& channels)
+{
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+    std::unordered_map<ChannelId, ChannelStatus> retained;
+    channel_order_.clear();
+    for (const auto& channel : channels) {
+        const auto previous = channel_status_by_id_.find(channel.channel_id);
+        auto status = previous == channel_status_by_id_.end() ? ChannelStatus{} : previous->second;
+        status.channel_id = channel.channel_id;
+        status.configured = true;
+        status.enabled = channel.enabled;
+        status.device_path = channel_target_description(channel);
+        retained.emplace(channel.channel_id, std::move(status));
+        channel_order_.push_back(channel.channel_id);
+    }
+    channel_status_by_id_ = std::move(retained);
+    refresh_channel_status_list_locked();
 }
 
 // 更新通道状态。
@@ -288,14 +307,38 @@ void DataStore::update_master_status(const MasterNodeStatus& status)
 // 更新设备状态。
 void DataStore::update_device_status(const DeviceStatus& status)
 {
+    update_device_statuses({status});
+}
+
+// 更新一组设备状态。
+void DataStore::update_device_statuses(const std::vector<DeviceStatus>& statuses)
+{
     std::unique_lock<std::shared_mutex> lock(mutex_);
+    const auto now = time_utils::steady_now_ms();
+    for (const auto& status : statuses) {
+        const auto ttl = freshness_ttl_by_master_.find(status.master_id);
+        const auto lifetime = ttl == freshness_ttl_by_master_.end() ? 3000 : ttl->second;
+        for (const auto& point : status.points) {
+            if (point.quality == DataQuality::kGood && point.valid) {
+                auto& stamp = freshness_deadlines_[{status.device_id, point.key}];
+                if (stamp.second == 0 || stamp.first != point.sample_time_ms)
+                    stamp = {point.sample_time_ms, now + lifetime};
+            }
+        }
+        update_device_status_locked(status);
+    }
+}
+
+void DataStore::update_device_status_locked(const DeviceStatus& input)
+{
+    const auto& status = input;
     const auto previous = device_status_by_id_.find(status.device_id);
     if (previous == device_status_by_id_.end()) {
         device_order_.push_back(status.device_id);
         device_ids_by_master_[status.master_id].push_back(status.device_id);
         device_status_by_id_[status.device_id] = status;
         device_status_index_by_id_[status.device_id] = system_status_.device_status_list.size();
-        system_status_.device_status_list.push_back(status);
+        system_status_.device_status_list.push_back(build_device_health_status(status));
         if (status.online) {
             ++system_status_.online_device_count;
         }
@@ -307,7 +350,7 @@ void DataStore::update_device_status(const DeviceStatus& status)
             index->second >= system_status_.device_status_list.size()) {
             refresh_device_status_list_locked();
         } else {
-            system_status_.device_status_list[index->second] = status;
+            system_status_.device_status_list[index->second] = build_device_health_status(status);
             if (was_online != status.online) {
                 if (status.online) {
                     ++system_status_.online_device_count;
@@ -317,45 +360,48 @@ void DataStore::update_device_status(const DeviceStatus& status)
             }
         }
     }
-    update_device_realtime_locked(status);
+    const auto name = device_names_.find(status.device_id);
+    if (name != device_names_.end()) {
+        device_status_by_id_.at(status.device_id).device_name = name->second;
+        system_status_.device_status_list.at(device_status_index_by_id_.at(status.device_id)).device_name = name->second;
+    }
+
 }
 
-// 更新一组设备状态。
-void DataStore::update_device_statuses(const std::vector<DeviceStatus>& statuses)
+std::vector<DeviceStatus> DataStore::expire_device_values(bool stopped, const std::vector<MasterNodeId>* masters)
 {
     std::unique_lock<std::shared_mutex> lock(mutex_);
-    // 一批设备共用同一写锁，并逐项维护在线计数，避免每个主站周期重复复制全部设备状态。
-    for (const auto& status : statuses) {
-        const auto previous = device_status_by_id_.find(status.device_id);
-        if (previous == device_status_by_id_.end()) {
-            device_order_.push_back(status.device_id);
-            device_ids_by_master_[status.master_id].push_back(status.device_id);
-            device_status_by_id_[status.device_id] = status;
-            device_status_index_by_id_[status.device_id] = system_status_.device_status_list.size();
-            system_status_.device_status_list.push_back(status);
-            if (status.online) {
-                ++system_status_.online_device_count;
-            }
-        } else {
-            const bool was_online = previous->second.online;
-            previous->second = status;
-            const auto index = device_status_index_by_id_.find(status.device_id);
-            if (index == device_status_index_by_id_.end() ||
-                index->second >= system_status_.device_status_list.size()) {
-                refresh_device_status_list_locked();
-            } else {
-                system_status_.device_status_list[index->second] = status;
-                if (was_online != status.online) {
-                    if (status.online) {
-                        ++system_status_.online_device_count;
-                    } else if (system_status_.online_device_count > 0) {
-                        --system_status_.online_device_count;
-                    }
-                }
+    const auto now = time_utils::steady_now_ms();
+    std::vector<DeviceStatus> changed;
+    for (const auto& entry : device_status_by_id_) {
+        auto status = entry.second;
+        if (masters && std::find(masters->begin(), masters->end(), status.master_id) == masters->end()) continue;
+        bool expired = false;
+        for (auto& point : status.points) {
+            const auto deadline = freshness_deadlines_.find({status.device_id, point.key});
+            if (point.quality == DataQuality::kGood &&
+                (stopped || (deadline != freshness_deadlines_.end() && now >= deadline->second.second))) {
+                point.quality = DataQuality::kStale;
+                point.valid = false;
+                point.message = stopped ? "采集已停止，保留最后采样值" : "采样已超期，等待新数据";
+                expired = true;
             }
         }
-        update_device_realtime_locked(status);
+        if (!expired) continue;
+        status.communication_quality = DataQuality::kStale;
+        status.last_collect_success = false;
+        status.online = false;
+        status.has_resistance = false;
+        status.last_error_message = stopped ? "采集已停止" : "采样已超期";
+        status.diagnosis = make_diagnosis(DiagnosisLevel::kDevice, status.device_id, status.device_name,
+            DiagnosisRunStatus::kWarning, stopped ? DiagnosisErrorCode::kPollingNotRunning : DiagnosisErrorCode::kDataInvalid,
+            status.last_success_time_ms, time_utils::system_now_ms(), 0);
+        status.diagnosis.message = status.last_error_message;
+        // 保留采样时间与数值；质量变化不能伪造一次新采样。
+        changed.push_back(std::move(status));
     }
+    for (const auto& status : changed) update_device_status_locked(status);
+    return changed;
 }
 
 // 更新系统状态。
@@ -434,11 +480,11 @@ std::vector<DeviceStatus> DataStore::get_device_statuses(const std::vector<Devic
 std::optional<DeviceRealtimeSnapshot> DataStore::get_device_realtime(const DeviceId& device_id) const
 {
     std::shared_lock<std::shared_mutex> lock(mutex_);
-    const auto iterator = device_realtime_by_id_.find(device_id);
-    if (iterator == device_realtime_by_id_.end()) {
+    const auto iterator = device_status_by_id_.find(device_id);
+    if (iterator == device_status_by_id_.end() || !has_realtime_sample(iterator->second)) {
         return std::nullopt;
     }
-    return iterator->second;
+    return build_realtime_snapshot(iterator->second);
 }
 
 // 读取全部通道状态。
@@ -514,9 +560,9 @@ std::vector<DeviceRealtimeSnapshot> DataStore::get_all_device_realtime_snapshots
     std::vector<DeviceRealtimeSnapshot> snapshots;
     snapshots.reserve(device_order_.size());
     for (const auto& device_id : device_order_) {
-        const auto iterator = device_realtime_by_id_.find(device_id);
-        if (iterator != device_realtime_by_id_.end() && is_valid_realtime_snapshot(iterator->second)) {
-            snapshots.push_back(iterator->second);
+        const auto iterator = device_status_by_id_.find(device_id);
+        if (iterator != device_status_by_id_.end() && has_realtime_sample(iterator->second)) {
+            snapshots.push_back(build_realtime_snapshot(iterator->second));
         }
     }
     return snapshots;
@@ -530,10 +576,10 @@ RealtimeViewSnapshot DataStore::get_realtime_page_snapshot() const
     snapshot.system_status = build_realtime_system_status(system_status_);
     snapshot.device_realtime_snapshots.reserve(device_order_.size());
     for (const auto& device_id : device_order_) {
-        const auto realtime = device_realtime_by_id_.find(device_id);
-        if (realtime != device_realtime_by_id_.end() &&
-            is_valid_realtime_snapshot(realtime->second)) {
-            snapshot.device_realtime_snapshots.push_back(realtime->second);
+        const auto realtime = device_status_by_id_.find(device_id);
+        if (realtime != device_status_by_id_.end() &&
+            has_realtime_sample(realtime->second)) {
+            snapshot.device_realtime_snapshots.push_back(build_realtime_snapshot(realtime->second));
         }
     }
     return snapshot;
@@ -559,10 +605,10 @@ RealtimeViewSnapshot DataStore::get_mqtt_realtime_snapshot() const
             statuses.push_back(std::move(lightweight_status));
         }
 
-        const auto realtime = device_realtime_by_id_.find(device_id);
-        if (realtime != device_realtime_by_id_.end() &&
-            is_valid_realtime_snapshot(realtime->second)) {
-            snapshot.device_realtime_snapshots.push_back(realtime->second);
+        const auto realtime = device_status_by_id_.find(device_id);
+        if (realtime != device_status_by_id_.end() &&
+            has_realtime_sample(realtime->second)) {
+            snapshot.device_realtime_snapshots.push_back(build_realtime_snapshot(realtime->second));
         }
     }
     return snapshot;
@@ -581,9 +627,9 @@ std::vector<DeviceRealtimeSnapshot> DataStore::get_device_realtime_snapshots_by_
 
     result.reserve(device_iterator->second.size());
     for (const auto& device_id : device_iterator->second) {
-        const auto realtime_iterator = device_realtime_by_id_.find(device_id);
-        if (realtime_iterator != device_realtime_by_id_.end() && is_valid_realtime_snapshot(realtime_iterator->second)) {
-            result.push_back(realtime_iterator->second);
+        const auto realtime_iterator = device_status_by_id_.find(device_id);
+        if (realtime_iterator != device_status_by_id_.end() && has_realtime_sample(realtime_iterator->second)) {
+            result.push_back(build_realtime_snapshot(realtime_iterator->second));
         }
     }
     return result;
@@ -669,7 +715,9 @@ DiagnosisStatus DataStore::get_current_object_diagnosis() const
 SystemStatus DataStore::get_system_status() const
 {
     std::shared_lock<std::shared_mutex> lock(mutex_);
-    return system_status_;
+    auto snapshot = system_status_;
+    for (auto& status : snapshot.device_status_list) status = device_status_by_id_.at(status.device_id);
+    return snapshot;
 }
 
 // 在持锁状态下重建系统状态。
@@ -730,18 +778,10 @@ void DataStore::refresh_device_status_list_locked()
             continue;
         }
         device_status_index_by_id_[device_id] = system_status_.device_status_list.size();
-        system_status_.device_status_list.push_back(iterator->second);
+        system_status_.device_status_list.push_back(build_device_health_status(iterator->second));
         if (iterator->second.online) {
             ++system_status_.online_device_count;
         }
-    }
-}
-
-// 在持锁状态下更新设备实时数据。
-void DataStore::update_device_realtime_locked(const DeviceStatus& status)
-{
-    if (has_valid_realtime_value(status)) {
-        device_realtime_by_id_[status.device_id] = build_realtime_snapshot(status);
     }
 }
 

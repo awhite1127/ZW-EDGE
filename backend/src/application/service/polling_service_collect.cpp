@@ -30,17 +30,15 @@ std::vector<PollingService::MasterPollingTarget>
 PollingService::get_enabled_master_targets() const
 {
     std::vector<MasterPollingTarget> targets;
-    if (system_config_ == nullptr) {
-        return targets;
-    }
-
     std::map<ChannelId, bool> channel_enabled_by_id;
-    for (const auto& channel : system_config_->channels) {
+    for (const auto& channel : system_config_.channels) {
         channel_enabled_by_id[channel.channel_id] = channel.enabled;
     }
 
-    targets.reserve(system_config_->master_nodes.size());
-    for (const auto& master : system_config_->master_nodes) {
+    std::unordered_map<MasterNodeId, std::vector<const DeviceConfig*>> devices_by_master;
+    for (const auto& device : system_config_.devices) devices_by_master[device.master_id].push_back(&device);
+    targets.reserve(system_config_.master_nodes.size());
+    for (const auto& master : system_config_.master_nodes) {
         if (!master.enabled ||
             (master.protocol != MasterProtocol::kModbusRtu &&
              master.protocol != MasterProtocol::kModbusTcp)) {
@@ -48,20 +46,18 @@ PollingService::get_enabled_master_targets() const
         }
 
         const auto channel_iterator = channel_enabled_by_id.find(master.channel_id);
-        if (channel_iterator == channel_enabled_by_id.end() || !channel_iterator->second) {
+        if (channel_iterator == channel_enabled_by_id.end()) {
             continue;
         }
 
         MasterPollingTarget target;
         target.master = master;
-        if (topology_manager_ != nullptr) {
-            const auto& devices =
-                topology_manager_->get_devices_by_master(master.master_id);
-            target.devices.reserve(devices.size());
-            for (const auto* device : devices) {
-                if (device != nullptr && device->enabled) {
-                    target.devices.push_back(device);
-                }
+        const auto& devices =
+            devices_by_master[master.master_id];
+        target.devices.reserve(devices.size());
+        for (const auto* device : devices) {
+            if (device != nullptr && device->enabled) {
+                target.devices.push_back(device);
             }
         }
         if (target.devices.empty()) {
@@ -74,26 +70,24 @@ PollingService::get_enabled_master_targets() const
             MasterCollector::build_runtime_plan(target.master, target.devices);
         target.mapper_runtime = RegisterMapper::build_runtime_plan(
             target.collector_runtime.device_template);
-        if (data_store_ != nullptr) {
-            const auto cached_status =
-                data_store_->get_master_status(target.master.master_id);
-            if (cached_status.has_value() &&
-                cached_status->last_poll_time_ms != 0) {
-                // 持久状态使用系统时间；启动时只换算一次剩余等待，并限制在一个周期内。
-                // 后续调度完全使用稳态时钟，不受 NTP/人工校时前后跳影响。
-                const auto system_now_ms = time_utils::system_now_ms();
-                TimestampMs remaining_ms = target.master.poll_interval_ms;
-                if (system_now_ms >= cached_status->last_poll_time_ms) {
-                    const auto elapsed_ms =
-                        system_now_ms - cached_status->last_poll_time_ms;
-                    remaining_ms =
-                        elapsed_ms >= target.master.poll_interval_ms
-                            ? 0
-                            : target.master.poll_interval_ms - elapsed_ms;
-                }
-                target.next_poll_steady_ms =
-                    time_utils::steady_now_ms() + remaining_ms;
+        const auto cached_status =
+            data_store_.get_master_status(target.master.master_id);
+        if (cached_status.has_value() &&
+            cached_status->last_poll_time_ms != 0) {
+            // 持久状态使用系统时间；启动时只换算一次剩余等待，并限制在一个周期内。
+            // 后续调度完全使用稳态时钟，不受 NTP/人工校时前后跳影响。
+            const auto system_now_ms = time_utils::system_now_ms();
+            TimestampMs remaining_ms = target.master.poll_interval_ms;
+            if (system_now_ms >= cached_status->last_poll_time_ms) {
+                const auto elapsed_ms =
+                    system_now_ms - cached_status->last_poll_time_ms;
+                remaining_ms =
+                    elapsed_ms >= target.master.poll_interval_ms
+                        ? 0
+                        : target.master.poll_interval_ms - elapsed_ms;
             }
+            target.next_poll_steady_ms =
+                time_utils::steady_now_ms() + remaining_ms;
         }
         targets.push_back(std::move(target));
     }
@@ -132,13 +126,6 @@ PollingService::MasterCollectionResult PollingService::execute_master_collection
     result.started_at_ms = time_utils::system_now_ms();
     result.master_status.master_id = master_config.master_id;
 
-    if (topology_manager_ == nullptr || channel_manager_ == nullptr || data_store_ == nullptr) {
-        return mark_master_collection_failed_without_io(
-            target,
-            "轮询采集服务尚未初始化",
-            DiagnosisErrorCode::kPollingNotRunning);
-    }
-
     if (!master_config.enabled) {
         return mark_master_collection_failed_without_io(
             target,
@@ -164,7 +151,7 @@ PollingService::MasterCollectionResult PollingService::execute_master_collection
     }
 
     MasterNodeStatus master_status;
-    const auto cached_master_status = data_store_->get_master_status(master_config.master_id);
+    const auto cached_master_status = data_store_.get_master_status(master_config.master_id);
     if (cached_master_status.has_value()) {
         master_status = *cached_master_status;
     }
@@ -187,18 +174,49 @@ PollingService::MasterCollectionResult PollingService::execute_master_collection
     // 重试由 MasterCollector 在每个读取区块内部独立执行；这里每轮只调用一次，
     // 避免一个区块失败导致已经成功的区块被整主站重复读取。
     const auto poll_started_at_steady_ms = time_utils::steady_now_ms();
-    result.collect_result = collector.collect_once(
-        master_config,
-        target.devices,
-        target.collector_runtime,
-        &master_status,
-        &stop_requested_);
+    std::uint64_t channel_generation = 0;
+    std::string prepare_error;
+    StatusCode prepare_status = StatusCode::kOk;
+    {
+        // 主站全部读取区块共享通信租约；映射、落库和回调不占用物理总线。
+        auto communication_lease =
+            channel_manager_.acquire_communication_lease(worker_channel_id);
+        channel_generation = channel_manager_.generation(worker_channel_id);
+        const auto* channel = channel_manager_.get_channel(worker_channel_id);
+        if (channel == nullptr || !channel->config().enabled) {
+            result.finished_at_ms = time_utils::system_now_ms();
+            target.next_poll_steady_ms = poll_started_at_steady_ms + master_config.poll_interval_ms;
+            result.success = true; // 停用通道没有采集失败，也不进行 IO。
+            return result;
+        }
+        if (!stop_requested_.load()) {
+            if (master_config.protocol == MasterProtocol::kModbusRtu) {
+                // 租约之间可能执行控制命令或切换逻辑通道，需重新准备当前串口。
+                prepare_status = channel_manager_.prepare_rtu_channel_for_collection(
+                    worker_channel_id, &prepare_error);
+            }
+            if (is_ok(prepare_status)) {
+                result.collect_result = collector.collect_once(
+                    master_config,
+                    target.devices,
+                    target.collector_runtime,
+                    &master_status,
+                    &stop_requested_);
+                update_channel_status(master_config.channel_id);
+            }
+        }
+    }
     if (stop_requested_.load()) {
         result.error_message = "轮询停止中，采集已取消";
         result.finished_at_ms = time_utils::system_now_ms();
         return result;
     }
-    update_channel_status(master_config.channel_id);
+    if (!is_ok(prepare_status)) {
+        return mark_master_collection_failed_without_io(
+            target,
+            prepare_error.empty() ? "RTU 通道准备失败: " + worker_channel_id : prepare_error,
+            DiagnosisErrorCode::kChannelOpenFailed);
+    }
     result.communication_success = result.collect_result.any_success;
     result.error_message = result.collect_result.error_message;
 
@@ -208,8 +226,8 @@ PollingService::MasterCollectionResult PollingService::execute_master_collection
                                       : time_utils::system_now_ms();
         if (result.error_message.empty()) result.error_message = "主控采集未生成设备区块结果";
         result.device_statuses = mark_devices_collect_failed(
-            target, failure_time, result.error_message);
-        data_store_->update_master_status(master_status);
+            target, failure_time, result.error_message, result.collect_result.diagnosis_error_code);
+        data_store_.update_master_status(master_status);
         target.next_poll_steady_ms =
             poll_started_at_steady_ms + master_config.poll_interval_ms;
         result.master_status = master_status;
@@ -237,7 +255,7 @@ PollingService::MasterCollectionResult PollingService::execute_master_collection
         }
     }
     std::unordered_map<DeviceId, std::string> previous_value_status_codes;
-    for (const auto& previous : data_store_->get_device_statuses(value_status_device_ids)) {
+    for (const auto& previous : data_store_.get_device_statuses(value_status_device_ids)) {
         previous_value_status_codes.emplace(
             previous.device_id,
             previous.diagnosis.error_code);
@@ -269,23 +287,46 @@ PollingService::MasterCollectionResult PollingService::execute_master_collection
             Logger::debug(message);
         }
     }
-    data_store_->update_device_statuses(statuses_to_store);
-    notify_device_status_updated(statuses_to_store);
+    if (!publish_device_statuses(statuses_to_store, worker_channel_id, channel_generation)) {
+        result.error_message = "通道配置已变化，丢弃旧配置采样";
+        result.finished_at_ms = time_utils::system_now_ms();
+        return result;
+    }
     for (const auto* device_status : changed_value_statuses) {
         set_last_error(
             device_status->device_id,
             device_status->diagnosis.message,
             device_status->updated_at_ms);
     }
-    write_history_records(master_config, statuses_to_store);
-    if (alarm_evaluator_ != nullptr) {
-        // 告警判定使用已写入运行缓存的同一批设备状态，避免页面实时值与告警判断来源不一致。
-        std::string alarm_error;
-        const auto alarm_status = alarm_evaluator_->evaluate_batch(statuses_to_store, &alarm_error);
-        if (!is_ok(alarm_status)) {
-            Logger::error("告警评估批次提交失败：" + alarm_error);
+    const auto time_generation = history_time_generation_.load();
+    std::size_t queued_points = 0;
+    for (const auto& status : statuses_to_store) queued_points += std::max<std::size_t>(1, status.points.size());
+    persistence_queue_.submit([this, master_config, statuses_to_store, time_generation] {
+        {
+            std::lock_guard<std::mutex> epoch_lock(persistence_epoch_mutex_);
+            if (time_generation != history_time_generation_.load()) return;
+            write_history_records(master_config, statuses_to_store, time_generation);
         }
-    }
+        if (alarm_evaluator_ == nullptr) return;
+        bool failure_reported = false;
+        for (;;) {
+            std::string alarm_error;
+            {
+                std::lock_guard<std::mutex> epoch_lock(persistence_epoch_mutex_);
+                if (time_generation != history_time_generation_.load()) return;
+                if (is_ok(alarm_evaluator_->evaluate_batch(statuses_to_store, &alarm_error))) return;
+            }
+            // 不越过失败样本推进告警连续计数；重试等待不占用时间调整锁或通信锁。
+            if (!failure_reported) Logger::error("告警评估提交失败，暂停消费并重试：" + alarm_error);
+            failure_reported = true;
+            if (stop_requested_.load()) {
+                Logger::error("停止期间告警样本未能提交：" + alarm_error);
+                return;
+            }
+            std::unique_lock<std::mutex> lock(wait_mutex_);
+            wait_cv_.wait_for(lock, std::chrono::seconds(1), [this] { return stop_requested_.load(); });
+        }
+    }, queued_points);
 
     if (!result.map_result.success) {
         // 映射错误单独通过诊断与本次服务结果上报；通讯质量和完整通讯成功标记
@@ -311,7 +352,7 @@ PollingService::MasterCollectionResult PollingService::execute_master_collection
         master_status.last_error_message = result.error_message;
     }
 
-    data_store_->update_master_status(master_status);
+    data_store_.update_master_status(master_status);
     target.next_poll_steady_ms =
         poll_started_at_steady_ms + master_config.poll_interval_ms;
     result.master_status = master_status;
@@ -334,19 +375,17 @@ std::vector<DeviceStatus> PollingService::prepare_device_statuses_for_store(
     merged_statuses.reserve(statuses.size());
 
     std::unordered_map<DeviceId, DeviceStatus> cached_by_id;
-    if (data_store_ != nullptr) {
-        std::vector<DeviceId> merge_ids;
-        merge_ids.reserve(statuses.size());
-        for (const auto& status : statuses) {
-            if (!status.last_collect_success ||
-                is_device_value_status_error_code(status.diagnosis.error_code)) {
-                merge_ids.push_back(status.device_id);
-            }
+    std::vector<DeviceId> merge_ids;
+    merge_ids.reserve(statuses.size());
+    for (const auto& status : statuses) {
+        if (!status.last_collect_success ||
+            is_device_value_status_error_code(status.diagnosis.error_code)) {
+            merge_ids.push_back(status.device_id);
         }
-        const auto cached_statuses = data_store_->get_device_statuses(merge_ids);
-        cached_by_id.reserve(cached_statuses.size());
-        for (const auto& cached : cached_statuses) cached_by_id.emplace(cached.device_id, cached);
     }
+    const auto cached_statuses = data_store_.get_device_statuses(merge_ids);
+    cached_by_id.reserve(cached_statuses.size());
+    for (const auto& cached : cached_statuses) cached_by_id.emplace(cached.device_id, cached);
 
     for (auto status : statuses) {
         const auto cached = cached_by_id.find(status.device_id);

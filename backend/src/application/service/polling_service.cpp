@@ -3,6 +3,7 @@
 #include "application/service/alarm_evaluator.h"
 #include "application/service/polling_service_internal.h"
 #include <chrono>
+#include <algorithm>
 #include <cmath>
 #include <ctime>
 #include <exception>
@@ -25,17 +26,15 @@ using namespace polling_service_internal;
 
 // PollingService 负责持续轮询调度；单主站采集步骤仍委托 MasterCollector / RegisterMapper 完成。
 PollingService::PollingService(
-    const SystemConfig* system_config,
-    TopologyManager* topology_manager,
-    ChannelManager* channel_manager,
-    DataStore* data_store,
+    const SystemConfig& system_config,
+    ChannelManager& channel_manager,
+    DataStore& data_store,
     HistoryStore* history_store,
     CommunicationTraceStore* communication_trace_store,
     AlarmEvaluator* alarm_evaluator,
     std::uint32_t poll_interval_ms,
     ErrorEventCallback error_event_callback)
     : system_config_(system_config),
-      topology_manager_(topology_manager),
       channel_manager_(channel_manager),
       data_store_(data_store),
       history_store_(history_store),
@@ -46,7 +45,6 @@ PollingService::PollingService(
 {
 }
 
-// 销毁 PollingService 实例并释放相关资源。
 PollingService::~PollingService()
 {
     stop();
@@ -58,14 +56,10 @@ StatusCode PollingService::start()
     if (running_.load()) {
         return StatusCode::kInvalidState;
     }
-    if (system_config_ == nullptr || topology_manager_ == nullptr || channel_manager_ == nullptr || data_store_ == nullptr) {
-        return StatusCode::kInvalidState;
-    }
-
     std::string channel_limit_error;
     const auto channel_limit_status =
         polling_service_internal::validate_polling_start_channel_limits(
-            *system_config_, &channel_limit_error);
+            system_config_, &channel_limit_error);
     if (!is_ok(channel_limit_status)) {
         const auto failed_at_ms = time_utils::system_now_ms();
         Logger::error("轮询启动失败：" + channel_limit_error);
@@ -95,25 +89,12 @@ StatusCode PollingService::start()
     stop_requested_.store(false);
     auto enabled_targets = get_enabled_master_targets();
     std::map<ChannelId, std::size_t> target_counts_by_channel;
-    using RtuTargetsByChannel = std::map<ChannelId, std::vector<MasterPollingTarget>>;
-    std::map<std::string, RtuTargetsByChannel> rtu_targets_by_worker;
-    std::map<ChannelId, std::vector<MasterPollingTarget>> tcp_targets_by_channel;
-    std::map<ChannelId, const ChannelConfig*> channels_by_id;
-    for (const auto& channel : system_config_->channels) {
-        channels_by_id[channel.channel_id] = &channel;
-    }
-    // RTU 按物理串口路径分 worker；同一路径内保持串行，独立串口与 TCP 通道可以并行处理。
+    std::map<ChannelId, std::vector<MasterPollingTarget>> targets_by_channel;
+    // 每个逻辑通道拥有可独立重配置的调度器，物理串口互斥由 ChannelManager 唯一管理。
     for (auto& target : enabled_targets) {
         const auto channel_id = target.master.channel_id;
-        const auto channel_iterator = channels_by_id.find(channel_id);
-        const auto* channel = channel_iterator == channels_by_id.end() ? nullptr : channel_iterator->second;
         ++target_counts_by_channel[channel_id];
-        if (channel != nullptr && channel->channel_type == ChannelType::kModbusRtuSerial) {
-            const auto worker_key = polling_service_internal::rtu_physical_worker_key(*channel);
-            rtu_targets_by_worker[worker_key][channel_id].push_back(std::move(target));
-        } else {
-            tcp_targets_by_channel[channel_id].push_back(std::move(target));
-        }
+        targets_by_channel[channel_id].push_back(std::move(target));
     }
 
     if (target_counts_by_channel.empty()) {
@@ -173,6 +154,8 @@ StatusCode PollingService::start()
     const auto rollback_started_workers = [this](const std::string& error_message) {
         polling_service_internal::rollback_started_workers(
             running_, stop_requested_, wait_cv_, channel_workers_);
+        if (freshness_worker_.joinable()) freshness_worker_.join();
+        persistence_queue_.stop();
         try {
             const auto failed_at_ms = time_utils::system_now_ms();
             set_last_error("polling", error_message, failed_at_ms);
@@ -196,15 +179,10 @@ StatusCode PollingService::start()
         }
     };
     try {
-        channel_workers_.reserve(tcp_targets_by_channel.size() + rtu_targets_by_worker.size());
-        for (auto& worker_group : rtu_targets_by_worker) {
-            channel_workers_.emplace_back(
-                &PollingService::rtu_worker_loop,
-                this,
-                worker_group.first,
-                std::move(worker_group.second));
-        }
-        for (auto& group : tcp_targets_by_channel) {
+        persistence_queue_.start();
+        freshness_worker_ = std::thread(&PollingService::freshness_worker_loop, this);
+        channel_workers_.reserve(targets_by_channel.size());
+        for (auto& group : targets_by_channel) {
             channel_workers_.emplace_back(
                 &PollingService::channel_worker_loop,
                 this,
@@ -262,6 +240,9 @@ void PollingService::stop()
         }
     }
     channel_workers_.clear();
+    if (freshness_worker_.joinable()) freshness_worker_.join();
+    if (was_running || had_worker) expire_device_values(true);
+    persistence_queue_.stop();
     flush_pending_history_records();
 
     running_.store(false);
@@ -285,6 +266,47 @@ void PollingService::stop()
             summary_snapshot.last_cycle_has_error,
             summary_snapshot.last_cycle_error_message,
             "轮询已停止");
+    }
+}
+
+void PollingService::invalidate_channels(const std::vector<ChannelConfig>& previous, const std::vector<ChannelConfig>& next)
+{
+    std::vector<MasterNodeId> masters;
+    for (const auto& master : system_config_.master_nodes) {
+        const auto old = std::find_if(previous.begin(), previous.end(), [&](const auto& c) { return c.channel_id == master.channel_id; });
+        const auto current = std::find_if(next.begin(), next.end(), [&](const auto& c) { return c.channel_id == master.channel_id; });
+        if (old != previous.end() && (current == next.end() || channel_transport_key(*old) != channel_transport_key(*current)))
+            masters.push_back(master.master_id);
+    }
+    std::lock_guard<std::mutex> lock(publication_mutex_);
+    notify_device_status_updated(data_store_.expire_device_values(true, &masters));
+}
+
+// 状态写入和北向通知共用顺序边界，防止超期通知覆盖随后成功的新采样。
+bool PollingService::publish_device_statuses(const std::vector<DeviceStatus>& statuses,
+    const ChannelId& channel, std::uint64_t generation)
+{
+    std::lock_guard<std::mutex> lock(publication_mutex_);
+    if (!channel.empty() && channel_manager_.generation(channel) != generation) return false;
+    data_store_.update_device_statuses(statuses);
+    notify_device_status_updated(statuses);
+    return true;
+}
+
+void PollingService::expire_device_values(bool stopped)
+{
+    std::lock_guard<std::mutex> lock(publication_mutex_);
+    notify_device_status_updated(data_store_.expire_device_values(stopped));
+}
+
+void PollingService::freshness_worker_loop()
+{
+    while (!stop_requested_.load()) {
+        try { expire_device_values(false); }
+        catch (const std::exception& error) { Logger::error("更新采样质量失败：" + std::string(error.what())); }
+        catch (...) { Logger::error("更新采样质量发生未知异常"); }
+        std::unique_lock<std::mutex> lock(wait_mutex_);
+        wait_cv_.wait_for(lock, std::chrono::milliseconds(250), [this] { return stop_requested_.load(); });
     }
 }
 
@@ -319,13 +341,11 @@ void PollingService::clear_last_error_summary()
         last_cycle_summary_.last_cycle_error_message.clear();
     }
 
-    if (data_store_ != nullptr) {
-        auto system_status = data_store_->get_system_status();
-        system_status.last_poll_cycle_has_error = false;
-        system_status.diagnosis = make_normal_diagnosis(DiagnosisLevel::kSystem, "polling", "轮询服务", 0);
-        system_status.last_poll_cycle_error_message.clear();
-        data_store_->update_system_status(system_status);
-    }
+    auto system_status = data_store_.get_system_status();
+    system_status.last_poll_cycle_has_error = false;
+    system_status.diagnosis = make_normal_diagnosis(DiagnosisLevel::kSystem, "polling", "轮询服务", 0);
+    system_status.last_poll_cycle_error_message.clear();
+    data_store_.update_system_status(system_status);
 }
 
 // 设置设备状态更新回调。

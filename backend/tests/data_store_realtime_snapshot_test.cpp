@@ -88,5 +88,13 @@ int main()
         std::cerr << "realtime health and point snapshots came from different updates\n";
         return 1;
     }
+    const auto expired = store.expire_device_values(true);
+    const auto after_stop = store.get_realtime_page_snapshot();
+    if (expired.empty() || after_stop.device_realtime_snapshots.empty() ||
+        after_stop.device_realtime_snapshots.front().points.front().quality != edge_controller::DataQuality::kStale ||
+        after_stop.device_realtime_snapshots.front().points.front().valid) {
+        std::cerr << "stopped values retained good quality in realtime projection\n";
+        return 1;
+    }
     return 0;
 }

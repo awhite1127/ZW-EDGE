@@ -8,6 +8,7 @@
 
 #include "shared/common/status_code.h"
 #include "data/model/alarm.h"
+#include "data/model/service_summary.h"
 
 struct sqlite3;
 
@@ -22,7 +23,7 @@ struct AlarmRuntimeStateKey {
 
 class AlarmStore {
 public:
-    // 销毁 AlarmStore 实例并释放相关资源。
+
     ~AlarmStore();
 
     // 初始化。
@@ -54,7 +55,11 @@ public:
     StatusCode apply_runtime_state_batch(
         const std::vector<AlarmRuntimeState>& upserts,
         const std::vector<AlarmRuntimeStateKey>& deletes,
-        std::string* error_message = nullptr);
+        std::string* error_message = nullptr,
+        std::vector<ServiceEvent>* events = nullptr);
+    StatusCode pending_events(std::vector<ServiceEvent>* events, std::string* error_message = nullptr) const;
+    StatusCode clear_event_outbox(std::string* error_message = nullptr);
+    StatusCode acknowledge_event(const std::string& event_id, std::string* error_message = nullptr);
     // 清空全部告警运行状态。
     StatusCode clear_runtime_states(std::string* error_message = nullptr);
     // 在单个 SQLite 事务内完整替换告警运行状态，用于配置导入失败后的无损恢复。

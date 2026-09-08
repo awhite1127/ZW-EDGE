@@ -39,7 +39,8 @@ public:
         AlarmStore* store,
         const std::vector<AlarmPointContext>& contexts,
         EventCallback event_callback,
-        std::string* error_message = nullptr);
+        std::string* error_message = nullptr,
+        std::function<bool()> suppress_events = {});
     // 判断当前组件是否已初始化。
     bool initialized() const;
     // 同步拓扑。
@@ -113,22 +114,6 @@ private:
         const std::vector<AlarmPointContext>& contexts,
         const std::string& removal_reason,
         std::string* error_message);
-    // 在持锁状态下生成告警触发事件，外部回调由公共入口在解锁后执行。
-    void queue_trigger_event_locked(
-        const AlarmRule& rule,
-        const AlarmRuntimeState& state,
-        const AlarmPointContext& context);
-    // 在持锁状态下生成告警确认事件，外部回调由公共入口在解锁后执行。
-    void queue_acknowledgement_event_locked(
-        const AlarmRuntimeState& state,
-        const AlarmPointContext& context);
-    // 在持锁状态下生成告警恢复事件，外部回调由公共入口在解锁后执行。
-    void queue_recovery_event_locked(
-        const AlarmRule& rule,
-        const AlarmRuntimeState& state,
-        const AlarmPointContext& context,
-        const std::string& reason,
-        TimestampMs timestamp_ms);
     // 读取计划 overlay 中的最新状态，未覆盖时回退到已提交内存状态。
     const AlarmRuntimeState* planned_state_locked(const EvaluationPlan& plan, const Key& key) const;
     // 读取计划 overlay 中的最新检查点。
@@ -160,6 +145,7 @@ private:
     // 规则、运行态和点位上下文必须按同一代更新，事件回调由实现控制在安全边界触发。
     mutable std::mutex mutex_;
     AlarmStore* store_{nullptr};
+    std::function<bool()> suppress_events_;
     EventCallback event_callback_{};
     std::map<Key, AlarmRule> rules_;
     std::map<Key, AlarmRuntimeState> states_;

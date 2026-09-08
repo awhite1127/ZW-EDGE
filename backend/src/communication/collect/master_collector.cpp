@@ -1,3 +1,4 @@
+#include "communication/collect/transport_diagnosis.h"
 // 单主站多区块采集编排：按设备与读取区块顺序执行协议请求并汇总局部失败。
 #include "communication/collect/master_collector.h"
 
@@ -37,17 +38,8 @@ DiagnosisErrorCode rtu_transport_diagnosis(
     const ChannelStatus& channel_status,
     const std::string& error_message)
 {
-    if (transport_status == StatusCode::kTimeout) return DiagnosisErrorCode::kModbusTimeout;
-    if (channel_status.diagnosis.error_code == to_string(DiagnosisErrorCode::kChannelOpenFailed)) {
-        return DiagnosisErrorCode::kChannelOpenFailed;
-    }
-    if (channel_status.diagnosis.error_code == to_string(DiagnosisErrorCode::kChannelConfigFailed)) {
-        return DiagnosisErrorCode::kChannelConfigFailed;
-    }
-    if (channel_status.diagnosis.error_code == to_string(DiagnosisErrorCode::kChannelIoError)) {
-        return DiagnosisErrorCode::kChannelIoError;
-    }
-    return classify_channel_error(error_message);
+    (void)error_message;
+    return transport_diagnosis(transport_status, channel_status, false);
 }
 
 // 生成读取计划标签。
@@ -330,7 +322,7 @@ MasterCollectResult MasterCollector::collect_once(
                 block_result.error_message = read_result.error_message;
                 block_result.diagnosis_error_code = read_result.diagnosis_error_code;
                 if (!block_result.success && block_result.diagnosis_error_code == DiagnosisErrorCode::kNone) {
-                    block_result.diagnosis_error_code = classify_runtime_error(block_result.error_message);
+                    block_result.diagnosis_error_code = transport_diagnosis(final_status, channel->status(), true);
                 }
                 append_modbus_trace(
                     communication_trace_store_,
@@ -379,13 +371,13 @@ MasterCollectResult MasterCollector::collect_once(
                             plan.register_count,
                             response,
                             &block_result.registers,
-                            &parse_error);
+                            &parse_error, &block_result.diagnosis_error_code);
                         if (is_ok(final_status)) {
                             block_result.success = true;
                             block_result.diagnosis_error_code = DiagnosisErrorCode::kNone;
                         } else {
                             block_result.error_message = parse_error;
-                            block_result.diagnosis_error_code = classify_modbus_error(parse_error);
+
                         }
                     }
                     append_modbus_trace(

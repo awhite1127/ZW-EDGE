@@ -41,7 +41,7 @@ struct ModbusWriteMultipleRegistersResult {
 // RTU 主路径仍保留在 MasterCollector 内；通用读取能力支持 FC03/FC04。
 class IModbusClient {
 public:
-    // 销毁 IModbusClient 实例并释放相关资源。
+
     virtual ~IModbusClient() = default;
 
     // 按读取区块给出的功能码、起始地址和数量读取连续寄存器块。

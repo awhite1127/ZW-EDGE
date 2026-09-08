@@ -29,7 +29,6 @@ std::size_t normalized_limit(std::size_t limit, std::size_t max_records_per_chan
 
 }  // namespace
 
-// 构造 CommunicationTraceStore 实例。
 CommunicationTraceStore::CommunicationTraceStore(std::size_t max_records_per_channel)
     : max_records_per_channel_(normalized_max_records_per_channel(max_records_per_channel))
 {

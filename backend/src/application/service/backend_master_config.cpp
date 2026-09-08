@@ -19,7 +19,7 @@ StatusCode BackendService::create_master_config(
     MasterNodeConfigUpdateResult* result,
     std::string* error_message)
 {
-    std::unique_ptr<PollingService> polling_to_stop;
+    std::shared_ptr<PollingService> polling_to_stop;
     std::unique_lock<std::shared_mutex> lock(service_mutex_);
     const auto ready_status =
         ensure_config_mutation_ready_locked("缺少主控创建结果输出参数", result, error_message);
@@ -33,10 +33,10 @@ StatusCode BackendService::create_master_config(
     }
 
     auto next_masters = system_config_.master_nodes;
-    const auto next_master = build_updated_master_config(nullptr, request);
+    const auto next_master = build_updated_master_config(request);
     next_masters.push_back(next_master);
     std::vector<DeviceConfig> derived_devices;
-    const auto sync_status = sync_devices_for_master_configs_locked(next_masters, &derived_devices, error_message);
+    const auto sync_status = sync_devices_for_master_configs_locked(next_masters, derived_devices, error_message);
     if (!is_ok(sync_status)) {
         return sync_status;
     }
@@ -80,7 +80,7 @@ StatusCode BackendService::update_master_config(
     MasterNodeConfigUpdateResult* result,
     std::string* error_message)
 {
-    std::unique_ptr<PollingService> polling_to_stop;
+    std::shared_ptr<PollingService> polling_to_stop;
     std::unique_lock<std::shared_mutex> lock(service_mutex_);
     const auto ready_status =
         ensure_config_mutation_ready_locked("缺少主控更新结果输出参数", result, error_message);
@@ -102,10 +102,10 @@ StatusCode BackendService::update_master_config(
     }
 
     auto next_masters = system_config_.master_nodes;
-    const auto next_master = build_updated_master_config(current_master, request);
+    const auto next_master = build_updated_master_config(request);
     next_masters[target_index] = next_master;
     std::vector<DeviceConfig> derived_devices;
-    const auto sync_status = sync_devices_for_master_configs_locked(next_masters, &derived_devices, error_message);
+    const auto sync_status = sync_devices_for_master_configs_locked(next_masters, derived_devices, error_message);
     if (!is_ok(sync_status)) {
         return sync_status;
     }
@@ -149,7 +149,7 @@ StatusCode BackendService::delete_master_config(
     MasterNodeConfigDeleteResult* result,
     std::string* error_message)
 {
-    std::unique_ptr<PollingService> polling_to_stop;
+    std::shared_ptr<PollingService> polling_to_stop;
     std::unique_lock<std::shared_mutex> lock(service_mutex_);
     const auto ready_status =
         ensure_config_mutation_ready_locked("缺少主控删除结果输出参数", result, error_message);
@@ -165,7 +165,7 @@ StatusCode BackendService::delete_master_config(
     auto next_masters = system_config_.master_nodes;
     next_masters.erase(next_masters.begin() + static_cast<std::ptrdiff_t>(target_index));
     std::vector<DeviceConfig> derived_devices;
-    const auto sync_status = sync_devices_for_master_configs_locked(next_masters, &derived_devices, error_message);
+    const auto sync_status = sync_devices_for_master_configs_locked(next_masters, derived_devices, error_message);
     if (!is_ok(sync_status)) {
         return sync_status;
     }

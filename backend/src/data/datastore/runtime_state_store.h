@@ -8,11 +8,6 @@
 
 namespace edge_controller {
 
-class RuntimeStateStore final : public DataStore {
-public:
-    RuntimeStateStore() = default;
-    RuntimeStateStore(const RuntimeStateStore&) = delete;
-    RuntimeStateStore& operator=(const RuntimeStateStore&) = delete;
-};
+using RuntimeStateStore = DataStore;
 
 }  // namespace edge_controller

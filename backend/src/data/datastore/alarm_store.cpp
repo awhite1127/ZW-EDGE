@@ -4,6 +4,7 @@
 #include "data/datastore/alarm_store.h"
 
 #include <cmath>
+#include "data/model/service_event_codec.h"
 
 #include "shared/common/sqlite_compat.h"
 #include "data/datastore/sqlite_helpers.h"
@@ -117,7 +118,7 @@ StatusCode AlarmStore::initialize(const std::string& path, std::string* error)
 StatusCode AlarmStore::initialize_schema_locked(std::string* error)
 {
     const auto configure = execute_locked(
-        "PRAGMA busy_timeout=5000;PRAGMA journal_mode=WAL;PRAGMA synchronous=NORMAL;"
+        "PRAGMA busy_timeout=5000;PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL;"
         "PRAGMA wal_autocheckpoint=100;", error);
     if (!is_ok(configure)) return configure;
 
@@ -125,11 +126,11 @@ StatusCode AlarmStore::initialize_schema_locked(std::string* error)
     Statement statement(
         database_,
         "SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
-        "AND name IN ('alarm_rules','alarm_runtime_states');");
+        "AND name IN ('alarm_rules','alarm_runtime_states','alarm_event_outbox');");
     if (!statement.ok() || sqlite3_step(statement.get()) != SQLITE_ROW) {
         return set_error(error, "检查告警配置表失败: " + db_error(database_));
     }
-    if (sqlite3_column_int(statement.get(), 0) != 2) {
+    if (sqlite3_column_int(statement.get(), 0) != 3) {
         return set_error(
             error,
             schema_migration_required_message("edge-config.db 缺少告警配置表"),
@@ -197,7 +198,8 @@ StatusCode AlarmStore::delete_runtime_state(const DeviceId& d,const std::string&
 StatusCode AlarmStore::apply_runtime_state_batch(
     const std::vector<AlarmRuntimeState>& upserts,
     const std::vector<AlarmRuntimeStateKey>& deletes,
-    std::string* error)
+    std::string* error,
+    std::vector<ServiceEvent>* events)
 {
     for (const auto& state : upserts) {
         if (!valid_runtime_state(state, error)) return StatusCode::kInvalidArgument;
@@ -207,7 +209,7 @@ StatusCode AlarmStore::apply_runtime_state_batch(
             return set_error(error, "批量删除告警运行态的键不能为空", StatusCode::kInvalidArgument);
         }
     }
-    if (upserts.empty() && deletes.empty()) return StatusCode::kOk;
+    if (upserts.empty() && deletes.empty() && (events == nullptr || events->empty())) return StatusCode::kOk;
 
     std::lock_guard<std::mutex> lock(mutex_);
     if (!available_locked(error)) return StatusCode::kInvalidState;
@@ -267,6 +269,26 @@ StatusCode AlarmStore::apply_runtime_state_batch(
         }
     }
 
+    // 与状态同事务保存事件，断电恢复后仍能搬运到事件库。
+    if (events != nullptr) {
+        try {
+            for (auto& event : *events) {
+                if (event.event_id.empty()) {
+                    Statement id(database_, "SELECT 'alarm-' || lower(hex(randomblob(16)));");
+                    if (!id.ok() || sqlite3_step(id.get()) != SQLITE_ROW)
+                        return rollback_with_error("生成告警事件 ID 失败");
+                    event.event_id = text_column(id.get(), 0);
+                }
+                const auto payload = encode_service_event(event).dump();
+                Statement insert(database_, "INSERT INTO alarm_event_outbox(event_id,payload) VALUES(?,?);");
+                if (!insert.ok() || !bind_text(insert.get(), 1, event.event_id) ||
+                    !bind_text(insert.get(), 2, payload) || sqlite3_step(insert.get()) != SQLITE_DONE)
+                    return rollback_with_error("保存告警事件待发送记录失败: " + db_error(database_));
+            }
+        } catch (const std::exception& exception) {
+            return rollback_with_error(exception.what());
+        }
+    }
     status = execute_locked("COMMIT;", error);
     if (!is_ok(status)) {
         const auto message = error == nullptr ? std::string("提交告警运行态批处理失败") : *error;
@@ -274,6 +296,40 @@ StatusCode AlarmStore::apply_runtime_state_batch(
     }
     return StatusCode::kOk;
 }
+StatusCode AlarmStore::pending_events(std::vector<ServiceEvent>* events, std::string* error) const
+{
+    if (events == nullptr) return StatusCode::kInvalidArgument;
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!available_locked(error)) return StatusCode::kInvalidState;
+    Statement query(database_, "SELECT payload FROM alarm_event_outbox ORDER BY sequence LIMIT 32;");
+    if (!query.ok()) return set_error(error, db_error(database_));
+    std::vector<ServiceEvent> result;
+    int step;
+    try {
+        while ((step = sqlite3_step(query.get())) == SQLITE_ROW)
+            result.push_back(decode_service_event(text_column(query.get(), 0)));
+    } catch (const std::exception& exception) { return set_error(error, exception.what()); }
+    if (step != SQLITE_DONE) return set_error(error, db_error(database_));
+    *events = std::move(result);
+    return StatusCode::kOk;
+}
+
+StatusCode AlarmStore::clear_event_outbox(std::string* error)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return execute_locked("DELETE FROM alarm_event_outbox;", error);
+}
+
+StatusCode AlarmStore::acknowledge_event(const std::string& event_id, std::string* error)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!available_locked(error)) return StatusCode::kInvalidState;
+    Statement statement(database_, "DELETE FROM alarm_event_outbox WHERE event_id=?;");
+    if (!statement.ok() || !bind_text(statement.get(), 1, event_id) || sqlite3_step(statement.get()) != SQLITE_DONE)
+        return set_error(error, db_error(database_));
+    return StatusCode::kOk;
+}
+
 // 清空全部告警运行状态。
 StatusCode AlarmStore::clear_runtime_states(std::string* e){std::lock_guard<std::mutex> l(mutex_);return execute_locked("DELETE FROM alarm_runtime_states;",e);}
 // 原子替换全部告警运行状态；任一状态非法或写入失败时保留替换前数据。

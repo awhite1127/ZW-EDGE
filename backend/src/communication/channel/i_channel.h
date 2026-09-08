@@ -35,7 +35,7 @@ using ChannelResponseValidator = std::function<StatusCode(
 // 定义最小化的字节流通道接口，用于一次请求对应一次响应的通道收发。
 class IChannel {
 public:
-    // 销毁 IChannel 实例并释放相关资源。
+
     virtual ~IChannel() = default;
 
     // 打开通道底层连接。

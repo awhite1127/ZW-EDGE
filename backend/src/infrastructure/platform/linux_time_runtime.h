@@ -37,9 +37,8 @@ public:
         std::string content;
     };
 
-    // 构造 LinuxTimeRuntime 实例。
     LinuxTimeRuntime();
-    // 构造 LinuxTimeRuntime 实例。
+
     explicit LinuxTimeRuntime(Paths paths);
 
     // 校验服务端。

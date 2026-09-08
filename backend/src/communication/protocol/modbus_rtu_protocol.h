@@ -2,6 +2,7 @@
 // 边界：严格校验帧边界与响应一致性，不猜测修复异常报文。
 
 #pragma once
+#include "data/model/diagnosis_status.h"
 
 #include <cstdint>
 #include <string>
@@ -49,14 +50,16 @@ public:
         std::uint16_t expected_register_count,
         const std::vector<std::uint8_t>& response,
         std::vector<std::uint16_t>* registers,
-        std::string* error_message);
+        std::string* error_message,
+        DiagnosisErrorCode* diagnosis = nullptr);
     // 解析 Modbus RTU 读保持寄存器响应帧。
     static StatusCode parse_read_holding_registers_response(
         std::uint8_t expected_slave_address,
         std::uint16_t expected_register_count,
         const std::vector<std::uint8_t>& response,
         std::vector<std::uint16_t>* registers,
-        std::string* error_message);
+        std::string* error_message,
+        DiagnosisErrorCode* diagnosis = nullptr);
 
     // 解析 Modbus RTU 写多个保持寄存器响应帧。
     static StatusCode parse_write_multiple_holding_registers_response(
@@ -64,7 +67,8 @@ public:
         std::uint16_t expected_start_register,
         std::uint16_t expected_register_count,
         const std::vector<std::uint8_t>& response,
-        std::string* error_message);
+        std::string* error_message,
+        DiagnosisErrorCode* diagnosis = nullptr);
 };
 
 }  // namespace edge_controller

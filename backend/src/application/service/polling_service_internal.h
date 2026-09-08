@@ -151,13 +151,6 @@ inline HistoryRecord make_history_record(
     return record;
 }
 
-// 根据错误文本分类诊断码，无法识别时返回未知错误。
-inline DiagnosisErrorCode classify_error_or_unknown(const std::string& message)
-{
-    const auto error_code = classify_runtime_error(message);
-    return error_code == DiagnosisErrorCode::kNone ? DiagnosisErrorCode::kUnknownError : error_code;
-}
-
 // 合并采集失败状态并保留最有诊断价值的信息。
 inline DeviceStatus merge_failed_status(const DeviceStatus& cached_status, const DeviceStatus& failed_status)
 {
@@ -185,10 +178,7 @@ inline DeviceStatus merge_failed_status(const DeviceStatus& cached_status, const
             : (failed_status.diagnosis.status == "offline"
                    ? DiagnosisRunStatus::kOffline
                    : DiagnosisRunStatus::kError),
-        // 根据错误文本分类诊断码，无法识别时返回未知错误。
-        classify_error_or_unknown(failed_status.last_error_message.empty()
-                                      ? failed_status.diagnosis.message
-                                      : failed_status.last_error_message),
+        diagnosis_code_from_string(failed_status.diagnosis.error_code),
         merged.last_success_time_ms,
         failed_status.last_failure_time_ms,
         cached_status.diagnosis.consecutive_failures + 1);

@@ -15,7 +15,7 @@ namespace edge_controller {
 
 class CommunicationTraceStore {
 public:
-    // 构造 CommunicationTraceStore 实例。
+
     explicit CommunicationTraceStore(std::size_t max_records_per_channel = 50);
 
     // 追加。

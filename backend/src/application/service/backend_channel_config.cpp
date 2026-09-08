@@ -1,4 +1,4 @@
-// 通道配置写入与应用入口；配置变更需要重建相关运行态，失败时返回可诊断的部分应用结果。
+// 通道配置局部应用：持久化成功后替换受影响资源，无关通道继续采集。
 #include "application/service/backend_service.h"
 
 #include <cstddef>
@@ -13,13 +13,12 @@ namespace edge_controller {
 
 using namespace backend_internal;
 
-// 新增通道配置并重新加载运行态。
+// 新增通道配置并局部应用连接变化。
 StatusCode BackendService::create_channel_config(
     const ChannelConfigUpdateRequest& request,
     ChannelConfigUpdateResult* result,
     std::string* error_message)
 {
-    std::unique_ptr<PollingService> polling_to_stop;
     std::unique_lock<std::shared_mutex> lock(service_mutex_);
     const auto ready_status =
         ensure_config_mutation_ready_locked("缺少通道创建结果输出参数", result, error_message);
@@ -53,43 +52,28 @@ StatusCode BackendService::create_channel_config(
     auto next_channels = system_config_.channels;
     next_channels.push_back(build_new_channel_config(request));
 
-    const bool was_polling_running = is_polling_running_locked();
-    if (was_polling_running) {
-        stop_polling_for_config_apply(lock, &polling_to_stop);
-    }
-
     const auto save_status =
-        write_channels_and_reload_locked(lock, next_channels, was_polling_running, error_message);
+        apply_channel_configs_locked(lock, next_channels, error_message);
     if (!is_ok(save_status)) {
         return save_status;
     }
 
-    const auto* applied_channel = find_channel_config(channel_id);
-    if (applied_channel == nullptr) {
-        return fail_config_apply_locked(
-            StatusCode::kInternalError,
-            "通道配置已保存，但无法重新读取",
-            was_polling_running,
-            error_message);
-    }
-
-    const auto apply_outcome = finish_config_apply_locked(was_polling_running, warning_message);
+    const auto* applied_channel = &next_channels.back();
 
     result->channel_id = applied_channel->channel_id;
     result->channel_config = *applied_channel;
-    result->message = apply_outcome.message;
-    result->warning_message = apply_outcome.warning_message;
-    result->polling_restarted = apply_outcome.polling_restarted;
+    result->message = "通道配置已应用，其他通道继续采集";
+    result->warning_message = warning_message;
+    result->polling_restarted = false;
     return StatusCode::kOk;
 }
 
-// 更新通道配置并重新加载运行态。
+// 更新通道配置并局部应用连接变化。
 StatusCode BackendService::update_channel_config(
     const ChannelConfigUpdateRequest& request,
     ChannelConfigUpdateResult* result,
     std::string* error_message)
 {
-    std::unique_ptr<PollingService> polling_to_stop;
     std::unique_lock<std::shared_mutex> lock(service_mutex_);
     const auto ready_status =
         ensure_config_mutation_ready_locked("缺少通道更新结果输出参数", result, error_message);
@@ -134,43 +118,28 @@ StatusCode BackendService::update_channel_config(
         return reference_status;
     }
 
-    const bool was_polling_running = is_polling_running_locked();
-    if (was_polling_running) {
-        stop_polling_for_config_apply(lock, &polling_to_stop);
-    }
-
     const auto save_status =
-        write_channels_and_reload_locked(lock, next_channels, was_polling_running, error_message);
+        apply_channel_configs_locked(lock, next_channels, error_message);
     if (!is_ok(save_status)) {
         return save_status;
     }
 
-    const auto* applied_channel = find_channel_config(request.channel_id);
-    if (applied_channel == nullptr) {
-        return fail_config_apply_locked(
-            StatusCode::kInternalError,
-            "通道配置已保存，但无法重新读取",
-            was_polling_running,
-            error_message);
-    }
-
-    const auto apply_outcome = finish_config_apply_locked(was_polling_running, warning_message);
+    const auto* applied_channel = &next_channels[target_index];
 
     result->channel_id = applied_channel->channel_id;
     result->channel_config = *applied_channel;
-    result->message = apply_outcome.message;
-    result->warning_message = apply_outcome.warning_message;
-    result->polling_restarted = apply_outcome.polling_restarted;
+    result->message = "通道配置已应用，其他通道继续采集";
+    result->warning_message = warning_message;
+    result->polling_restarted = false;
     return StatusCode::kOk;
 }
 
-// 删除通道配置并重新加载运行态。
+// 删除通道配置并局部应用连接变化。
 StatusCode BackendService::delete_channel_config(
     const ChannelId& channel_id,
     ChannelConfigDeleteResult* result,
     std::string* error_message)
 {
-    std::unique_ptr<PollingService> polling_to_stop;
     std::unique_lock<std::shared_mutex> lock(service_mutex_);
     const auto ready_status =
         ensure_config_mutation_ready_locked("缺少通道删除结果输出参数", result, error_message);
@@ -198,74 +167,50 @@ StatusCode BackendService::delete_channel_config(
     auto next_channels = system_config_.channels;
     next_channels.erase(next_channels.begin() + static_cast<std::ptrdiff_t>(target_index));
 
-    const bool was_polling_running = is_polling_running_locked();
-    if (was_polling_running) {
-        stop_polling_for_config_apply(lock, &polling_to_stop);
-    }
-
     const auto save_status =
-        write_channels_and_reload_locked(lock, next_channels, was_polling_running, error_message);
+        apply_channel_configs_locked(lock, next_channels, error_message);
     if (!is_ok(save_status)) {
         return save_status;
     }
 
-    const auto apply_outcome = finish_config_apply_locked(was_polling_running);
-
     result->channel_id = channel_id;
-    result->message = apply_outcome.message;
-    result->polling_restarted = apply_outcome.polling_restarted;
+    result->message = "通道配置已应用，其他通道继续采集";
+    result->polling_restarted = false;
     return StatusCode::kOk;
 }
 
-
-// 保存通道配置后刷新运行态，必要时恢复采集。
-StatusCode BackendService::write_channels_and_reload_locked(
+// 保存已验证配置并替换受影响通道，保持无关资源与设备状态。
+StatusCode BackendService::apply_channel_configs_locked(
     std::unique_lock<std::shared_mutex>& lock,
     const std::vector<ChannelConfig>& channels,
-    bool restore_polling,
     std::string* error_message)
 {
+    auto next_config = system_config_;
+    next_config.channels = channels;
+    TopologyManager next_topology;
+    const auto topology_status = next_topology.build(next_config, error_message);
+    if (!is_ok(topology_status)) return topology_status;
     const auto previous_channels = system_config_.channels;
-    std::string write_error;
-    lock.unlock();
-    const auto write_status = config_store_.save_channels(channels, &write_error);
-    lock.lock();
-    if (!is_ok(write_status)) {
-        return fail_config_apply_locked(
-            write_status,
-            config_write_error_message("配置保存失败: 写入 SQLite channels 失败", write_error),
-            restore_polling,
-            error_message);
+    // 配置锁保持到持久化及资源交换结束，避免控制命令持共享锁等待被本次应用占用的总线。
+    (void)lock;
+    try {
+        const auto status = channel_manager_.apply_channels(channels,
+            [&] { return config_store_.save_channels(channels, error_message); }, error_message);
+        if (!is_ok(status)) return status;
+    } catch (const std::exception& error) {
+        if (error_message) *error_message = std::string("准备通道配置失败：") + error.what();
+        return StatusCode::kInternalError;
     }
-
-    std::vector<std::string> reload_errors;
-    const auto reload_status = reload_config_for_apply(lock, &reload_errors);
-    if (is_ok(reload_status)) {
-        return StatusCode::kOk;
-    }
-
-    const auto reload_detail = reload_errors.empty()
-        ? std::string("重新加载通道配置失败")
-        : reload_errors.front();
-    std::string rollback_error;
-    lock.unlock();
-    const auto rollback_status = config_store_.save_channels(previous_channels, &rollback_error);
-    lock.lock();
-
-    std::string failure_message = "通道配置应用失败：" + reload_detail;
-    if (is_ok(rollback_status)) {
-        append_message(&failure_message, "SQLite channels 已回滚，旧运行态保持不变");
-    } else {
-        append_message(
-            &failure_message,
-            config_write_error_message("回滚 SQLite channels 失败", rollback_error));
-    }
-    return fail_config_apply_locked(
-        reload_status,
-        failure_message,
-        restore_polling,
-        error_message,
-        is_ok(rollback_status));
+    for (const auto& previous : previous_channels)
+        if (!find_channel_config_in_list(channels, previous.channel_id)) communication_trace_store_.clear_channel(previous.channel_id);
+    system_config_.channels.swap(next_config.channels);
+    topology_manager_ = std::move(next_topology);
+    topology_manager_.rebind_system_config(system_config_);
+    data_store_.reconcile_channels(channels);
+    refresh_channel_statuses();
+    // 被停用或重绑定的通道旧值立即失效，后续新采样恢复质量。
+    if (polling_runtime_.get()) polling_runtime_.get()->invalidate_channels(previous_channels, channels);
+    return StatusCode::kOk;
 }
 
 }  // namespace edge_controller

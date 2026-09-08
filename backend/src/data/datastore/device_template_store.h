@@ -18,7 +18,7 @@ class ConfigImportTransaction;
 
 class DeviceTemplateStore {
 public:
-    // 销毁 DeviceTemplateStore 实例并释放相关资源。
+
     ~DeviceTemplateStore();
 
     // 初始化设备模板 SQLite 存储并补齐内置模板。

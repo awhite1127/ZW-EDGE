@@ -101,7 +101,7 @@ struct HistoryCleanupResult {
 
 class HistoryStore {
 public:
-    // 销毁 HistoryStore 实例并释放相关资源。
+
     ~HistoryStore();
 
     // 初始化历史数据 SQLite 存储并创建必要表结构。

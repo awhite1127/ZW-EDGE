@@ -34,18 +34,25 @@ bool is_supported_read_function(std::uint8_t function_code)
 StatusCode parse_tcp_exception_response(
     std::uint16_t mbap_length,
     const std::vector<std::uint8_t>& response,
-    std::string* error_message)
+    std::string* error_message,
+    DiagnosisErrorCode* diagnosis)
 {
+    if (diagnosis) *diagnosis = DiagnosisErrorCode::kNone;
+    const auto fail = [diagnosis](StatusCode status, DiagnosisErrorCode code) {
+        if (diagnosis) *diagnosis = code;
+        return status;
+    };
+
     if (mbap_length != 3 || response.size() != ModbusTcpProtocol::kMbapHeaderSize + 2U) {
         if (error_message != nullptr) {
             *error_message = "Modbus TCP 异常响应长度不匹配";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusTcpResponseLengthInvalid);
     }
     if (error_message != nullptr) {
         *error_message = "Modbus TCP 异常码: " + std::to_string(response[8]);
     }
-    return StatusCode::kProtocolError;
+    return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusTcpExceptionResponse);
 }
 
 }  // namespace
@@ -130,8 +137,15 @@ StatusCode ModbusTcpProtocol::parse_read_registers_response(
     const std::vector<std::uint8_t>& response,
     std::vector<std::uint16_t>* registers,
     std::string* error_message,
-    bool* connection_reusable)
+    bool* connection_reusable,
+    DiagnosisErrorCode* diagnosis)
 {
+    if (diagnosis) *diagnosis = DiagnosisErrorCode::kNone;
+    const auto fail = [diagnosis](StatusCode status, DiagnosisErrorCode code) {
+        if (diagnosis) *diagnosis = code;
+        return status;
+    };
+
     if (connection_reusable != nullptr) {
         *connection_reusable = false;
     }
@@ -139,7 +153,7 @@ StatusCode ModbusTcpProtocol::parse_read_registers_response(
         if (error_message != nullptr) {
             *error_message = "寄存器输出参数为空";
         }
-        return StatusCode::kInvalidArgument;
+        return fail(StatusCode::kInvalidArgument, DiagnosisErrorCode::kConfigInvalid);
     }
     registers->clear();
 
@@ -147,20 +161,20 @@ StatusCode ModbusTcpProtocol::parse_read_registers_response(
         if (error_message != nullptr) {
             *error_message = "读取寄存器功能码只支持 FC03 或 FC04";
         }
-        return StatusCode::kInvalidArgument;
+        return fail(StatusCode::kInvalidArgument, DiagnosisErrorCode::kConfigInvalid);
     }
     if (expected_register_count == 0 || expected_register_count > kMaxReadRegisterCount) {
         if (error_message != nullptr) {
             *error_message = "单次读取寄存器数量超出范围，允许范围为 1-125";
         }
-        return StatusCode::kInvalidArgument;
+        return fail(StatusCode::kInvalidArgument, DiagnosisErrorCode::kConfigInvalid);
     }
 
     if (response.size() < kMbapHeaderSize + 2U) {
         if (error_message != nullptr) {
             *error_message = "Modbus TCP 响应长度不足";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusTcpResponseLengthInvalid);
     }
 
     const auto transaction_id = read_u16_be(response, 0);
@@ -168,7 +182,7 @@ StatusCode ModbusTcpProtocol::parse_read_registers_response(
         if (error_message != nullptr) {
             *error_message = "MBAP Transaction ID 不匹配";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kMbapTransactionMismatch);
     }
 
     const auto protocol_id = read_u16_be(response, 2);
@@ -176,7 +190,7 @@ StatusCode ModbusTcpProtocol::parse_read_registers_response(
         if (error_message != nullptr) {
             *error_message = "MBAP Protocol ID 异常";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kMbapProtocolInvalid);
     }
 
     const auto mbap_length = read_u16_be(response, 4);
@@ -184,7 +198,7 @@ StatusCode ModbusTcpProtocol::parse_read_registers_response(
         if (error_message != nullptr) {
             *error_message = "MBAP Length 异常";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kMbapLengthInvalid);
     }
 
     const auto unit_id = response[6];
@@ -192,7 +206,7 @@ StatusCode ModbusTcpProtocol::parse_read_registers_response(
         if (error_message != nullptr) {
             *error_message = "Unit ID 不匹配";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusTcpUnitMismatch);
     }
 
     // 到这里已确认 MBAP 边界、事务号及 Unit ID，整帧已被完整消费；
@@ -203,14 +217,14 @@ StatusCode ModbusTcpProtocol::parse_read_registers_response(
 
     const auto function_code = response[7];
     if (function_code == static_cast<std::uint8_t>(expected_function_code | 0x80U)) {
-        return parse_tcp_exception_response(mbap_length, response, error_message);
+        return parse_tcp_exception_response(mbap_length, response, error_message, diagnosis);
     }
 
     if (function_code != expected_function_code) {
         if (error_message != nullptr) {
             *error_message = "功能码不匹配";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusFunctionMismatch);
     }
 
     const auto expected_byte_count = static_cast<std::size_t>(expected_register_count) * 2U;
@@ -219,7 +233,7 @@ StatusCode ModbusTcpProtocol::parse_read_registers_response(
         if (error_message != nullptr) {
             *error_message = "Byte Count 异常";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusTcpResponseLengthInvalid);
     }
 
     const auto expected_response_size = kMbapHeaderSize + 2U + expected_byte_count;
@@ -227,7 +241,7 @@ StatusCode ModbusTcpProtocol::parse_read_registers_response(
         if (error_message != nullptr) {
             *error_message = "Modbus TCP 响应数据长度异常";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusTcpResponseLengthInvalid);
     }
 
     registers->reserve(expected_register_count);
@@ -248,7 +262,8 @@ StatusCode ModbusTcpProtocol::parse_read_holding_registers_response(
     const std::vector<std::uint8_t>& response,
     std::vector<std::uint16_t>* registers,
     std::string* error_message,
-    bool* connection_reusable)
+    bool* connection_reusable,
+    DiagnosisErrorCode* diagnosis)
 {
     return parse_read_registers_response(
         expected_transaction_id,
@@ -258,7 +273,7 @@ StatusCode ModbusTcpProtocol::parse_read_holding_registers_response(
         response,
         registers,
         error_message,
-        connection_reusable);
+        connection_reusable, diagnosis);
 }
 
 // 解析 Modbus TCP 写多个保持寄存器响应 ADU。
@@ -269,8 +284,15 @@ StatusCode ModbusTcpProtocol::parse_write_multiple_holding_registers_response(
     std::uint16_t expected_register_count,
     const std::vector<std::uint8_t>& response,
     std::string* error_message,
-    bool* connection_reusable)
+    bool* connection_reusable,
+    DiagnosisErrorCode* diagnosis)
 {
+    if (diagnosis) *diagnosis = DiagnosisErrorCode::kNone;
+    const auto fail = [diagnosis](StatusCode status, DiagnosisErrorCode code) {
+        if (diagnosis) *diagnosis = code;
+        return status;
+    };
+
     if (connection_reusable != nullptr) {
         *connection_reusable = false;
     }
@@ -279,14 +301,14 @@ StatusCode ModbusTcpProtocol::parse_write_multiple_holding_registers_response(
         if (error_message != nullptr) {
             *error_message = "单次写多个保持寄存器数量超出范围，允许范围为 1-123";
         }
-        return StatusCode::kInvalidArgument;
+        return fail(StatusCode::kInvalidArgument, DiagnosisErrorCode::kConfigInvalid);
     }
 
     if (response.size() < kMbapHeaderSize + 1U) {
         if (error_message != nullptr) {
             *error_message = "Modbus TCP 响应长度不足";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusTcpResponseLengthInvalid);
     }
 
     // 校验 MBAP 事务标识、协议标识和长度字段。
@@ -295,7 +317,7 @@ StatusCode ModbusTcpProtocol::parse_write_multiple_holding_registers_response(
         if (error_message != nullptr) {
             *error_message = "MBAP Transaction ID 不匹配";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kMbapTransactionMismatch);
     }
 
     const auto protocol_id = read_u16_be(response, 2);
@@ -303,7 +325,7 @@ StatusCode ModbusTcpProtocol::parse_write_multiple_holding_registers_response(
         if (error_message != nullptr) {
             *error_message = "MBAP Protocol ID 异常";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kMbapProtocolInvalid);
     }
 
     const auto mbap_length = read_u16_be(response, 4);
@@ -311,7 +333,7 @@ StatusCode ModbusTcpProtocol::parse_write_multiple_holding_registers_response(
         if (error_message != nullptr) {
             *error_message = "MBAP Length 异常";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kMbapLengthInvalid);
     }
 
     // 校验 Unit ID，并优先处理 Modbus 异常响应。
@@ -320,7 +342,7 @@ StatusCode ModbusTcpProtocol::parse_write_multiple_holding_registers_response(
         if (error_message != nullptr) {
             *error_message = "Unit ID 不匹配";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusTcpUnitMismatch);
     }
 
     if (connection_reusable != nullptr) {
@@ -329,14 +351,14 @@ StatusCode ModbusTcpProtocol::parse_write_multiple_holding_registers_response(
 
     const auto function_code = response[7];
     if (function_code == static_cast<std::uint8_t>(kWriteMultipleHoldingRegistersFunction | 0x80U)) {
-        return parse_tcp_exception_response(mbap_length, response, error_message);
+        return parse_tcp_exception_response(mbap_length, response, error_message, diagnosis);
     }
 
     if (function_code != kWriteMultipleHoldingRegistersFunction) {
         if (error_message != nullptr) {
             *error_message = "功能码不匹配";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusFunctionMismatch);
     }
 
     // 正常响应的 PDU 长度固定，并应回显起始地址和寄存器数量。
@@ -344,14 +366,14 @@ StatusCode ModbusTcpProtocol::parse_write_multiple_holding_registers_response(
         if (error_message != nullptr) {
             *error_message = "MBAP Length 异常";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kMbapLengthInvalid);
     }
 
     if (response.size() != 12) {
         if (error_message != nullptr) {
             *error_message = "Modbus TCP 响应数据长度异常";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusTcpResponseLengthInvalid);
     }
 
     const auto start_register = read_u16_be(response, 8);
@@ -360,14 +382,14 @@ StatusCode ModbusTcpProtocol::parse_write_multiple_holding_registers_response(
         if (error_message != nullptr) {
             *error_message = "起始寄存器地址不匹配";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusWriteEchoMismatch);
     }
 
     if (register_count != expected_register_count) {
         if (error_message != nullptr) {
             *error_message = "写入寄存器数量不匹配";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusWriteEchoMismatch);
     }
 
     return StatusCode::kOk;

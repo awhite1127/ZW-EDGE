@@ -31,6 +31,7 @@ using edge_controller::TimestampMs;
 using edge_controller::is_ok;
 
 constexpr const char* kAlarmSchema =
+    "CREATE TABLE alarm_event_outbox(sequence INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT NOT NULL UNIQUE,payload TEXT NOT NULL);"
     "CREATE TABLE alarm_rules("
     "device_id TEXT NOT NULL,point_key TEXT NOT NULL,enabled INTEGER NOT NULL,"
     "high_enabled INTEGER NOT NULL,high_threshold REAL NOT NULL,low_enabled INTEGER NOT NULL,"
@@ -242,6 +243,10 @@ bool test_failure_atomicity()
         !expect(event_targets.empty(), "failed upsert batch dispatched events")) {
         return false;
     }
+    std::vector<edge_controller::ServiceEvent> pending;
+    if (!is_ok(store.pending_events(&pending, &error)) || !pending.empty())
+        return expect(false, "failed state transaction left an outbox event");
+
 
     if (!database.execute("DROP TRIGGER fail_alarm_upsert;", &error)) {
         std::cerr << "could not drop upsert failure trigger: " << error << '\n';

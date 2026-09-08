@@ -91,7 +91,7 @@ StatusCode ConfigStore::configure_database_locked(std::string* error_message)
     const char* configure_sql =
         "PRAGMA busy_timeout = 5000;"
         "PRAGMA journal_mode = WAL;"
-        "PRAGMA synchronous = NORMAL;"
+        "PRAGMA synchronous = FULL;"
         "PRAGMA wal_autocheckpoint = 100;"
         "PRAGMA foreign_keys = ON;";
     std::string detail;

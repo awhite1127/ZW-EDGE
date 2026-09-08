@@ -95,19 +95,17 @@ inline ServiceErrorSummary build_current_error_summary(const SystemStatus& statu
 
 class ScopedConfigApplyFlag {
 public:
-    // 禁止复制配置应用状态守卫。
+    // 调用者先取得配置独占锁；标记覆盖锁外停止阶段。
     explicit ScopedConfigApplyFlag(std::atomic_bool& flag)
         : flag_(&flag)
     {
         flag_->store(true);
     }
 
-    // 构造 ScopedConfigApplyFlag 实例。
     ScopedConfigApplyFlag(const ScopedConfigApplyFlag&) = delete;
     // 禁止复制赋值配置应用状态守卫。
     ScopedConfigApplyFlag& operator=(const ScopedConfigApplyFlag&) = delete;
 
-    // 销毁 ScopedConfigApplyFlag 实例并释放相关资源。
     ~ScopedConfigApplyFlag()
     {
         if (flag_ != nullptr) {
@@ -153,12 +151,6 @@ const MasterNodeConfig* find_master_config_in_list(
     const std::vector<MasterNodeConfig>& masters,
     const MasterNodeId& master_id,
     std::size_t* index = nullptr);
-// 查找设备配置内列表。
-const DeviceConfig* find_device_config_in_list(
-    const std::vector<DeviceConfig>& devices,
-    const DeviceId& device_id,
-    std::size_t* index = nullptr);
-
 // 校验通道配置更新请求。
 StatusCode validate_channel_update_request(
     const std::vector<ChannelConfig>& channels,
@@ -203,7 +195,6 @@ StatusCode validate_master_update_request_with_templates(
     std::string* error_message);
 // 合并现有配置与请求，构造更新后的主站配置。
 MasterNodeConfig build_updated_master_config(
-    const MasterNodeConfig* current,
     const MasterNodeConfigUpdateRequest& request);
 
 }  // namespace edge_controller::backend_internal

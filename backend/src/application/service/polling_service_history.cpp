@@ -77,9 +77,10 @@ bool PollingService::HistoryWriteThrottleKey::operator<(const HistoryWriteThrott
 // 从设备状态中提取并写入历史趋势记录。
 void PollingService::write_history_records(
     const MasterNodeConfig& master_config,
-    const std::vector<DeviceStatus>& statuses)
+    const std::vector<DeviceStatus>& statuses,
+    std::uint64_t time_generation)
 {
-    if (history_store_ == nullptr) {
+    if (history_store_ == nullptr || time_generation != history_time_generation_.load()) {
         return;
     }
 
@@ -101,7 +102,6 @@ void PollingService::write_history_records(
     }
     std::vector<HistoryRecord> candidate_records;
     candidate_records.reserve(point_capacity);
-    const auto time_generation = history_time_generation_.load();
     for (const auto& status : statuses) {
         if (status.updated_at_ms < kMinimumValidSystemTimeMs) {
             continue;
@@ -154,6 +154,7 @@ void PollingService::write_history_records(
 // 系统时间调整后修正历史聚合窗口。
 std::size_t PollingService::on_system_time_adjusted(TimestampMs after_time_ms)
 {
+    std::lock_guard<std::mutex> epoch_lock(persistence_epoch_mutex_);
     std::lock_guard<std::mutex> lock(history_write_mutex_);
     ++history_time_generation_;
     const auto discarded = pending_history_records_.size();

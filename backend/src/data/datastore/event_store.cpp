@@ -294,7 +294,7 @@ StatusCode EventStore::initialize(const std::string& path, std::string* error)
 StatusCode EventStore::initialize_schema_locked(std::string* error)
 {
     const auto configure = execute_locked(
-        "PRAGMA busy_timeout=5000;PRAGMA journal_mode=WAL;PRAGMA synchronous=NORMAL;"
+        "PRAGMA busy_timeout=5000;PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL;"
         "PRAGMA wal_autocheckpoint=100;", error);
     if (!is_ok(configure)) return configure;
 
@@ -371,6 +371,19 @@ StatusCode EventStore::append(ServiceEvent event, std::string* error, ServiceEve
     event.occurrence_count = 1;
     event.level = event.level.empty() ? "info" : event.level;
     event.source = event.source.empty() ? "system" : event.source;
+
+    if (!event.event_id.empty()) {
+        Statement existing_id(database_, "SELECT 1 FROM service_events WHERE event_id=?;");
+        if (!existing_id.ok() || !bind_text(existing_id.get(), 1, event.event_id)) return fail(error, db_error(database_));
+        const auto step = sqlite3_step(existing_id.get());
+        if (step == SQLITE_ROW) { if (stored_event != nullptr) *stored_event = event; return StatusCode::kOk; }
+        if (step != SQLITE_DONE) return fail(error, db_error(database_));
+        const auto status = insert_locked(&event, error);
+        if (!is_ok(status)) return status;
+        ++record_count_;
+        if (stored_event != nullptr) *stored_event = event;
+        return cleanup_locked(time_utils::system_now_ms(), error);
+    }
 
     const auto fingerprint = event_fingerprint(event);
     auto existing = dedup_states_.find(fingerprint);

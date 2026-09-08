@@ -1,3 +1,4 @@
+#include "communication/collect/transport_diagnosis.h"
 // 通过 TCP 通道执行带事务号的 Modbus 请求响应。
 // 边界：严格校验帧边界与响应一致性，不猜测修复异常报文。
 
@@ -22,34 +23,12 @@ DiagnosisErrorCode diagnosis_from_channel_status(
     const std::string& error_message,
     StatusCode transport_status)
 {
-    if (channel_status.diagnosis.error_code == to_string(DiagnosisErrorCode::kTcpConnectFailed)) {
-        return DiagnosisErrorCode::kTcpConnectFailed;
-    }
-    if (channel_status.diagnosis.error_code == to_string(DiagnosisErrorCode::kTcpConnectTimeout)) {
-        return DiagnosisErrorCode::kTcpConnectTimeout;
-    }
-    if (channel_status.diagnosis.error_code == to_string(DiagnosisErrorCode::kTcpSendFailed)) {
-        return DiagnosisErrorCode::kTcpSendFailed;
-    }
-    if (channel_status.diagnosis.error_code == to_string(DiagnosisErrorCode::kTcpResponseTimeout)) {
-        return DiagnosisErrorCode::kTcpResponseTimeout;
-    }
-    if (channel_status.diagnosis.error_code == to_string(DiagnosisErrorCode::kTcpRemoteClosed)) {
-        return DiagnosisErrorCode::kTcpRemoteClosed;
-    }
-    if (channel_status.diagnosis.error_code == to_string(DiagnosisErrorCode::kMbapLengthInvalid)) {
-        return DiagnosisErrorCode::kMbapLengthInvalid;
-    }
-    if (transport_status == StatusCode::kTimeout) {
-        return DiagnosisErrorCode::kTcpResponseTimeout;
-    }
-    const auto classified = classify_channel_error(error_message);
-    return classified == DiagnosisErrorCode::kUnknownError ? DiagnosisErrorCode::kChannelIoError : classified;
+    (void)error_message;
+    return transport_diagnosis(transport_status, channel_status, true);
 }
 
 }  // namespace
 
-// 构造 ModbusTcpClient 实例。
 ModbusTcpClient::ModbusTcpClient(
     IChannel* channel,
     const std::atomic<bool>* cancel_requested)
@@ -135,13 +114,13 @@ StatusCode ModbusTcpClient::read_registers(
                 response,
                 &result->registers,
                 &parse_error,
-                connection_reusable);
+                connection_reusable, &result->diagnosis_error_code);
         });
     result->timestamp_ms = time_utils::system_now_ms();
     if (!is_ok(result->transport_status)) {
         if (response_validated) {
             result->error_message = parse_error;
-            result->diagnosis_error_code = classify_modbus_error(parse_error);
+
             return result->transport_status;
         }
         const auto channel_status = channel_->status();
@@ -243,13 +222,13 @@ StatusCode ModbusTcpClient::write_multiple_holding_registers(
                 result->register_count,
                 response,
                 &parse_error,
-                connection_reusable);
+                connection_reusable, &result->diagnosis_error_code);
         });
     result->timestamp_ms = time_utils::system_now_ms();
     if (!is_ok(result->transport_status)) {
         if (response_validated) {
             result->error_message = parse_error;
-            result->diagnosis_error_code = classify_modbus_error(parse_error);
+
             return result->transport_status;
         }
         const auto channel_status = channel_->status();

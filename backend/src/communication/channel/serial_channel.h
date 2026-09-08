@@ -31,9 +31,9 @@ std::size_t modbus_rtu_expected_response_length(
 // 基于 termios 和 Linux 串口设备节点实现的串口通道。
 class SerialChannel : public IChannel {
 public:
-    // 构造 SerialChannel 实例。
+
     explicit SerialChannel(ChannelConfig config);
-    // 销毁 SerialChannel 实例并释放相关资源。
+
     ~SerialChannel() override;
 
     // 打开并配置 Linux 串口设备。
@@ -70,7 +70,8 @@ private:
     // 在已持锁状态下清空串口缓冲。
     StatusCode flush_locked();
     // 记录串口通道错误并更新状态。
-    void set_error_locked(const std::string& error_message);
+    void set_error_locked(const std::string& error_message,
+        DiagnosisErrorCode code = DiagnosisErrorCode::kChannelIoError);
 
     ChannelConfig config_{};
     ChannelStatus status_{};

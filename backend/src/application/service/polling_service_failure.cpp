@@ -41,11 +41,9 @@ PollingService::MasterCollectionResult PollingService::mark_master_collection_fa
     result.collect_result.timestamp_ms = result.finished_at_ms;
 
     MasterNodeStatus master_status;
-    if (data_store_ != nullptr) {
-        const auto cached_master_status = data_store_->get_master_status(master_config.master_id);
-        if (cached_master_status.has_value()) {
-            master_status = *cached_master_status;
-        }
+    const auto cached_master_status = data_store_.get_master_status(master_config.master_id);
+    if (cached_master_status.has_value()) {
+        master_status = *cached_master_status;
     }
 
     master_status.master_id = master_config.master_id;
@@ -66,15 +64,13 @@ PollingService::MasterCollectionResult PollingService::mark_master_collection_fa
         master_status.consecutive_failure_count);
     master_status.diagnosis.message = error_message;
     master_status.last_error_message = error_message;
-    if (data_store_ != nullptr) {
-        data_store_->update_master_status(master_status);
-    }
+    data_store_.update_master_status(master_status);
 
     result.master_status = master_status;
     result.device_statuses = mark_devices_collect_failed(
         target,
         result.finished_at_ms,
-        error_message);
+        error_message, error_code);
     return result;
 }
 
@@ -134,7 +130,8 @@ void PollingService::account_master_collection_result(
 std::vector<DeviceStatus> PollingService::mark_devices_collect_failed(
     const MasterPollingTarget& target,
     TimestampMs failure_time_ms,
-    const std::string& error_message)
+    const std::string& error_message,
+    DiagnosisErrorCode error_code)
 {
     const auto& master_config = target.master;
     const auto& devices = target.devices;
@@ -159,7 +156,7 @@ std::vector<DeviceStatus> PollingService::mark_devices_collect_failed(
                     static_cast<std::uint64_t>(device_template->device_address_stride));
             read_results.push_back(std::move(device_result));
         }
-        const auto failure_code = classify_error_or_unknown(error_message);
+        const auto failure_code = error_code;
         for (const auto& plan : plans) {
             DeviceReadBlockResult block_result;
             block_result.block_key = plan.block_key;
@@ -189,11 +186,10 @@ std::vector<DeviceStatus> PollingService::mark_devices_collect_failed(
 
     if (failed_statuses.size() != devices.size()) {
         failed_statuses = build_failed_device_statuses(
-            devices, failure_time_ms, error_message);
+            devices, failure_time_ms, error_message, error_code);
     }
-    if (!failed_statuses.empty() && data_store_ != nullptr) {
-        data_store_->update_device_statuses(failed_statuses);
-        notify_device_status_updated(failed_statuses);
+    if (!failed_statuses.empty()) {
+        publish_device_statuses(failed_statuses);
     }
     return failed_statuses;
 }
@@ -202,23 +198,22 @@ std::vector<DeviceStatus> PollingService::mark_devices_collect_failed(
 std::vector<DeviceStatus> PollingService::build_failed_device_statuses(
     const std::vector<const DeviceConfig*>& devices,
     TimestampMs failure_time_ms,
-    const std::string& error_message) const
+    const std::string& error_message,
+    DiagnosisErrorCode error_code) const
 {
     std::vector<DeviceStatus> statuses;
     statuses.reserve(devices.size());
 
     std::unordered_map<DeviceId, DeviceStatus> cached_by_id;
-    if (data_store_ != nullptr) {
-        std::vector<DeviceId> device_ids;
-        device_ids.reserve(devices.size());
-        for (const auto* device : devices) {
-            if (device != nullptr) device_ids.push_back(device->device_id);
-        }
-        const auto cached_statuses = data_store_->get_device_statuses(device_ids);
-        cached_by_id.reserve(cached_statuses.size());
-        for (const auto& cached : cached_statuses) {
-            cached_by_id.emplace(cached.device_id, cached);
-        }
+    std::vector<DeviceId> device_ids;
+    device_ids.reserve(devices.size());
+    for (const auto* device : devices) {
+        if (device != nullptr) device_ids.push_back(device->device_id);
+    }
+    const auto cached_statuses = data_store_.get_device_statuses(device_ids);
+    cached_by_id.reserve(cached_statuses.size());
+    for (const auto& cached : cached_statuses) {
+        cached_by_id.emplace(cached.device_id, cached);
     }
 
     for (const auto* device : devices) {
@@ -238,9 +233,13 @@ std::vector<DeviceStatus> PollingService::build_failed_device_statuses(
         status.online = false;
         status.last_collect_success = false;
         status.communication_quality = DataQuality::kBad;
+        status.has_resistance = false;
+        for (auto& point : status.points) {
+            point.valid = false;
+            point.quality = DataQuality::kBad;
+        }
         status.updated_at_ms = failure_time_ms;
         status.last_failure_time_ms = failure_time_ms;
-        const auto error_code = classify_error_or_unknown(error_message);
         status.diagnosis = make_diagnosis(
             DiagnosisLevel::kDevice,
             device->device_id,
@@ -264,101 +263,38 @@ void PollingService::set_last_error(
     const std::string& message,
     TimestampMs timestamp_ms)
 {
-    // 根据错误类型确定诊断层级并构造备用诊断。
-    const auto error_code = classify_error_or_unknown(message);
-    const auto level = error_code == DiagnosisErrorCode::kChannelOpenFailed ||
-                               error_code == DiagnosisErrorCode::kChannelConfigFailed ||
-                               error_code == DiagnosisErrorCode::kChannelIoError ||
-                               message.find("通道 ") != std::string::npos
-                           ? DiagnosisLevel::kChannel
-                           : DiagnosisLevel::kMaster;
+    // 有结构化状态时使用原码；无状态的线程异常保留详情，不从文字猜协议原因。
     auto diagnosis = make_diagnosis(
-        level,
-        target_id,
-        target_id,
-        error_code == DiagnosisErrorCode::kModbusTimeout ? DiagnosisRunStatus::kOffline : DiagnosisRunStatus::kError,
-        error_code,
-        0,
-        timestamp_ms,
-        0);
+        DiagnosisLevel::kSystem, target_id, target_id, DiagnosisRunStatus::kError,
+        DiagnosisErrorCode::kUnknownError, 0, timestamp_ms, 0);
     if (!message.empty()) {
         // 诊断码用于分类，运行时原始文本用于向启动调用方和运维页面解释具体失败原因。
         diagnosis.message = message;
     }
-    // 优先复用数据存储中更具体的通道、主站或设备诊断。
-    if (data_store_ != nullptr) {
-        const auto channel_status = data_store_->get_channel_status(target_id);
-        if (channel_status.has_value() && diagnosis_has_issue(channel_status->diagnosis)) {
-            const auto current = channel_status->diagnosis;
-            {
-                std::lock_guard<std::mutex> lock(summary_mutex_);
-                last_error_summary_.has_error = true;
-                last_error_summary_.source = current.level.empty() ? "channel" : current.level;
-                last_error_summary_.target_id = current.target_id;
-                last_error_summary_.diagnosis = current;
-                last_error_summary_.message = current.message;
-                last_error_summary_.timestamp_ms = current.last_error_time_ms;
-            }
-            const auto callback = error_event_callback_;
-            if (callback) {
-                callback(current.level.empty() ? "channel" : current.level, current.target_id, current.message, timestamp_ms);
-            }
-            return;
-        }
-
-        // 目标不是通道时继续查找主站诊断。
-        const auto master_status = data_store_->get_master_status(target_id);
-        if (master_status.has_value() && diagnosis_has_issue(master_status->diagnosis)) {
-            const auto current = master_status->diagnosis;
-            {
-                std::lock_guard<std::mutex> lock(summary_mutex_);
-                last_error_summary_.has_error = true;
-                last_error_summary_.source = current.level.empty() ? "master" : current.level;
-                last_error_summary_.target_id = current.target_id;
-                last_error_summary_.diagnosis = current;
-                last_error_summary_.message = current.message;
-                last_error_summary_.timestamp_ms = current.last_error_time_ms;
-            }
-            const auto callback = error_event_callback_;
-            if (callback) {
-                callback(current.level.empty() ? "master" : current.level, current.target_id, current.message, timestamp_ms);
-            }
-            return;
-        }
-
-        // 最后尝试采用设备级诊断。
-        const auto device_status = data_store_->get_device_status(target_id);
-        if (device_status.has_value() && diagnosis_has_issue(device_status->diagnosis)) {
-            const auto current = device_status->diagnosis;
-            {
-                std::lock_guard<std::mutex> lock(summary_mutex_);
-                last_error_summary_.has_error = true;
-                last_error_summary_.source = current.level.empty() ? "device" : current.level;
-                last_error_summary_.target_id = current.target_id;
-                last_error_summary_.diagnosis = current;
-                last_error_summary_.message = current.message;
-                last_error_summary_.timestamp_ms = current.last_error_time_ms;
-            }
-            const auto callback = error_event_callback_;
-            if (callback) {
-                callback(current.level.empty() ? "device" : current.level, current.target_id, current.message, timestamp_ms);
-            }
-            return;
-        }
-    }
-    // 没有更具体诊断时保存前面构造的轮询错误，并通知事件回调。
+    // 优先选通道、主站、设备诊断；选定后共用一处摘要更新和回调出口。
+    std::string source = diagnosis.level.empty() ? "polling" : diagnosis.level;
+    const auto select_diagnosis = [&](const auto& status, const char* fallback_source) {
+        if (!status.has_value() || !diagnosis_has_issue(status->diagnosis)) return false;
+        diagnosis = status->diagnosis;
+        source = diagnosis.level.empty() ? fallback_source : diagnosis.level;
+        return true;
+    };
+    const bool selected =
+        select_diagnosis(data_store_.get_channel_status(target_id), "channel") ||
+        select_diagnosis(data_store_.get_master_status(target_id), "master") ||
+        select_diagnosis(data_store_.get_device_status(target_id), "device");
     {
         std::lock_guard<std::mutex> lock(summary_mutex_);
-        last_error_summary_.has_error = !message.empty();
-        last_error_summary_.source = diagnosis.level.empty() ? "polling" : diagnosis.level;
+        last_error_summary_.has_error = selected || !message.empty();
+        last_error_summary_.source = source;
         last_error_summary_.target_id = diagnosis.target_id;
         last_error_summary_.diagnosis = diagnosis;
         last_error_summary_.message = diagnosis.message;
-        last_error_summary_.timestamp_ms = timestamp_ms;
+        last_error_summary_.timestamp_ms = selected ? diagnosis.last_error_time_ms : timestamp_ms;
     }
     const auto callback = error_event_callback_;
     if (callback) {
-        callback(diagnosis.level.empty() ? "polling" : diagnosis.level, diagnosis.target_id, diagnosis.message, timestamp_ms);
+        callback(source, diagnosis.target_id, diagnosis.message, timestamp_ms);
     }
 }
 

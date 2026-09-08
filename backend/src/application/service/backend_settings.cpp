@@ -235,11 +235,12 @@ StatusCode BackendService::request_factory_reset(FactoryResetResult* result, std
         return StatusCode::kInvalidState;
     }
     backend_internal::ScopedConfigApplyFlag config_apply_guard(config_apply_in_progress_);
+    std::unique_lock<std::mutex> alarm_delivery_guard(alarm_delivery_mutex_);
     const auto previous_modbus_settings = modbus_server_settings_;
     const auto previous_modbus_bank = modbus_register_bank_;
     const auto previous_modbus_mappings = modbus_register_mappings_;
     const bool was_polling_running = is_polling_running_locked();
-    std::unique_ptr<PollingService> polling_to_stop;
+    std::shared_ptr<PollingService> polling_to_stop;
     stop_polling_for_config_apply(lock, &polling_to_stop);
 
     SystemConfig reset_config = system_config_;
@@ -362,6 +363,8 @@ StatusCode BackendService::request_factory_reset(FactoryResetResult* result, std
     cleanup_error.clear();
     const auto runtime_status = alarm_store_.clear_runtime_states(&cleanup_error);
     if (!is_ok(runtime_status)) cleanup_errors.push_back("告警状态: " + cleanup_error);
+    cleanup_error.clear();
+    if (!is_ok(alarm_store_.clear_event_outbox(&cleanup_error))) cleanup_errors.push_back("告警待发送事件: " + cleanup_error);
     std::string first_boot_entry_error;
     const auto first_boot_entry_status = config_store_.reset_first_boot_admin_entry(&first_boot_entry_error);
     if (!is_ok(first_boot_entry_status)) {
@@ -381,8 +384,9 @@ StatusCode BackendService::request_factory_reset(FactoryResetResult* result, std
         const auto alarm_reload_status = alarm_evaluator_.initialize(
             &alarm_store_, build_alarm_point_contexts_locked(),
             [this](ServiceEvent event) {
-                append_event(event.level, event.source, event.target_id, event.summary, event.detail, event.timestamp_ms, event.diagnosis);
-            }, &alarm_reload_error);
+                (void)event;
+                data_maintenance_wakeup_.notify_all();
+            }, &alarm_reload_error, [this] { return event_persistence_suppressed_.load(); });
         if (!is_ok(alarm_reload_status)) cleanup_errors.push_back("告警缓存: " + alarm_reload_error);
     }
     std::string reset_message = "恢复出厂数据成功";

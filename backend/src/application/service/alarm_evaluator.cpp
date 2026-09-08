@@ -110,7 +110,8 @@ StatusCode AlarmEvaluator::initialize(
     AlarmStore* store,
     const std::vector<AlarmPointContext>& contexts,
     EventCallback event_callback,
-    std::string* error_message)
+    std::string* error_message,
+    std::function<bool()> suppress_events)
 {
     if (store == nullptr) {
         if (error_message != nullptr) *error_message = "告警判定器缺少 AlarmStore";
@@ -129,6 +130,7 @@ StatusCode AlarmEvaluator::initialize(
     std::unique_lock<std::mutex> lock(mutex_);
     store_ = store;
     event_callback_ = std::move(event_callback);
+    suppress_events_ = std::move(suppress_events);
     rules_.clear();
     states_.clear();
     contexts_.clear();
@@ -309,9 +311,11 @@ StatusCode AlarmEvaluator::acknowledge_active_alarm(
         updated.acknowledged_at_ms = time_utils::system_now_ms();
         updated.acknowledged_by = acknowledged_by;
         updated.updated_at_ms = std::max(updated.updated_at_ms, updated.acknowledged_at_ms);
-        const auto status = persist_state_locked(updated, error_message);
+        std::vector<ServiceEvent> events{make_acknowledgement_event(updated, context->second)};
+        const auto status = store_->apply_runtime_state_batch({updated}, {}, error_message, &events);
         if (!is_ok(status)) return finish(status);
-        queue_acknowledgement_event_locked(updated, context->second);
+        states_[key] = updated;
+        for (auto& event : events) pending_events_.push_back(std::move(event));
     }
 
     const auto& current = states_.at(key);
@@ -479,8 +483,9 @@ StatusCode AlarmEvaluator::evaluate_batch(
                 event.timestamp_ms));
         }
     }
-    if (!upserts.empty() || !deletes.empty()) {
-        const auto status = store->apply_runtime_state_batch(upserts, deletes, error_message);
+    if (suppress_events_ && suppress_events_()) events.clear();
+    if (!upserts.empty() || !deletes.empty() || !events.empty()) {
+        const auto status = store->apply_runtime_state_batch(upserts, deletes, error_message, &events);
         if (!is_ok(status)) return status;
     }
 
@@ -658,47 +663,20 @@ StatusCode AlarmEvaluator::clear_state_locked(
 {
     const auto state = states_.find(key);
     if (state == states_.end()) return StatusCode::kOk;
-    const auto status = store_->delete_runtime_state(key.first, key.second, error_message);
-    if (!is_ok(status)) return status;
+    std::vector<ServiceEvent> events;
     if (state->second.state == "active") {
         const auto rule = rules_.find(key);
         const auto context = contexts_.find(key);
-        if (rule != rules_.end() && context != contexts_.end()) {
-            queue_recovery_event_locked(
-                rule->second, state->second, context->second, reason, timestamp_ms);
-        }
+        if (rule != rules_.end() && context != contexts_.end())
+            events.push_back(make_recovery_event(rule->second, state->second, context->second, reason, timestamp_ms));
     }
+    if (suppress_events_ && suppress_events_()) events.clear();
+    const auto status = store_->apply_runtime_state_batch({}, {{key.first, key.second}}, error_message, &events);
+    if (!is_ok(status)) return status;
+    for (auto& event : events) pending_events_.push_back(std::move(event));
     states_.erase(state);
     last_checkpoint_times_.erase(key);
     return StatusCode::kOk;
-}
-
-// 在持锁状态下生成告警触发事件。
-void AlarmEvaluator::queue_trigger_event_locked(
-    const AlarmRule& rule,
-    const AlarmRuntimeState& state,
-    const AlarmPointContext& context)
-{
-    pending_events_.push_back(make_trigger_event(rule, state, context));
-}
-
-// 排队记录确认事件。
-void AlarmEvaluator::queue_acknowledgement_event_locked(
-    const AlarmRuntimeState& state,
-    const AlarmPointContext& context)
-{
-    pending_events_.push_back(make_acknowledgement_event(state, context));
-}
-
-// 在持锁状态下生成告警恢复事件。
-void AlarmEvaluator::queue_recovery_event_locked(
-    const AlarmRule& rule,
-    const AlarmRuntimeState& state,
-    const AlarmPointContext& context,
-    const std::string& reason,
-    TimestampMs timestamp_ms)
-{
-    pending_events_.push_back(make_recovery_event(rule, state, context, reason, timestamp_ms));
 }
 
 // 在持锁状态下评估点位。

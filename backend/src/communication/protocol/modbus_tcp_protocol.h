@@ -2,6 +2,7 @@
 // 边界：严格校验帧边界与响应一致性，不猜测修复异常报文。
 
 #pragma once
+#include "data/model/diagnosis_status.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -54,7 +55,8 @@ public:
         const std::vector<std::uint8_t>& response,
         std::vector<std::uint16_t>* registers,
         std::string* error_message,
-        bool* connection_reusable = nullptr);
+        bool* connection_reusable = nullptr,
+        DiagnosisErrorCode* diagnosis = nullptr);
     // 解析 Modbus TCP 读保持寄存器响应 ADU。
     static StatusCode parse_read_holding_registers_response(
         std::uint16_t expected_transaction_id,
@@ -63,7 +65,8 @@ public:
         const std::vector<std::uint8_t>& response,
         std::vector<std::uint16_t>* registers,
         std::string* error_message,
-        bool* connection_reusable = nullptr);
+        bool* connection_reusable = nullptr,
+        DiagnosisErrorCode* diagnosis = nullptr);
 
     // 解析 Modbus TCP 写多个保持寄存器响应 ADU。
     static StatusCode parse_write_multiple_holding_registers_response(
@@ -73,7 +76,8 @@ public:
         std::uint16_t expected_register_count,
         const std::vector<std::uint8_t>& response,
         std::string* error_message,
-        bool* connection_reusable = nullptr);
+        bool* connection_reusable = nullptr,
+        DiagnosisErrorCode* diagnosis = nullptr);
 };
 
 }  // namespace edge_controller

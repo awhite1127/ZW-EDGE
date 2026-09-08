@@ -2,6 +2,7 @@
 // 边界：协调跨组件状态；配置切换和耗时 I/O 必须遵守既有锁边界。
 
 #include "application/service/backend_service.h"
+#include "communication/collect/transport_diagnosis.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -279,8 +280,8 @@ void parse_em100_test_registers(EM100RecordReadResponse* response)
 
 }  // namespace
 
-// 对指定主站执行一次 Modbus 写多个保持寄存器。
-StatusCode BackendService::write_multiple_holding_registers(
+// 调用方持有命令串行锁和配置共享锁，解析和发送使用同一运行态。
+StatusCode BackendService::write_multiple_holding_registers_locked(
     const ModbusWriteMultipleRegistersRequest& request,
     ModbusWriteMultipleRegistersResponse* response,
     std::string* error_message)
@@ -331,9 +332,6 @@ StatusCode BackendService::write_multiple_holding_registers(
             "写入寄存器范围超出 uint16 地址空间");
     }
 
-    // 串行化手动写入，并在配置快照中查找主站和通道。
-    std::lock_guard<std::mutex> command_lock(manual_modbus_mutex_);
-    std::shared_lock<std::shared_mutex> lock(service_mutex_);
     if (!initialized_) {
         return fail(StatusCode::kInvalidState, DiagnosisErrorCode::kConfigInvalid, "后端服务尚未初始化");
     }
@@ -607,9 +605,7 @@ StatusCode BackendService::read_em100_holding_register_range_once(
     if (!is_ok(read_result.transport_status)) {
         const auto channel_status = channel->status();
         read_result.error_message = channel_status.last_error_message.empty() ? "通道响应超时" : channel_status.last_error_message;
-        read_result.diagnosis_error_code = read_result.transport_status == StatusCode::kTimeout
-                                               ? DiagnosisErrorCode::kModbusTimeout
-                                               : classify_channel_error(read_result.error_message);
+        read_result.diagnosis_error_code = transport_diagnosis(read_result.transport_status, channel_status);
     } else {
         std::string parse_error;
         const auto parse_status = ModbusRtuProtocol::parse_read_registers_response(
@@ -618,10 +614,10 @@ StatusCode BackendService::read_em100_holding_register_range_once(
             register_count,
             read_result.response_frame,
             &read_result.registers,
-            &parse_error);
+            &parse_error, &read_result.diagnosis_error_code);
         if (!is_ok(parse_status)) {
             read_result.error_message = parse_error;
-            read_result.diagnosis_error_code = classify_modbus_error(parse_error);
+
             read_result.transport_status = parse_status;
         } else {
             read_result.success = true;
@@ -686,12 +682,14 @@ StatusCode BackendService::execute_device_command(
         return fail(StatusCode::kInvalidArgument, "command_key 不能为空");
     }
 
+    // 锁顺序与直接写入一致；配置租约覆盖解析、参数转换及发送。
+    std::lock_guard<std::mutex> command_lock(manual_modbus_mutex_);
+    std::shared_lock<std::shared_mutex> configuration_lock(service_mutex_);
     // 在配置快照中查找设备、所属主站、设备类型和命令定义。
     DeviceConfig device;
     MasterNodeConfig master;
     DeviceTemplateWriteCommandDefinition command;
     {
-        std::shared_lock<std::shared_mutex> lock(service_mutex_);
         if (!initialized_) {
             return fail(StatusCode::kInvalidState, "后端服务尚未初始化");
         }
@@ -720,7 +718,7 @@ StatusCode BackendService::execute_device_command(
             return fail(StatusCode::kNotFound, "未找到设备所属主控: " + device.master_id);
         }
 
-    const auto device_template = find_device_template(master.device_template);
+        const auto device_template = find_device_template(master.device_template);
         if (device_template == nullptr) {
             return fail(StatusCode::kNotFound, "未找到设备模板: " + master.device_template);
         }
@@ -823,7 +821,7 @@ StatusCode BackendService::execute_device_command(
 
     // 调用统一的多寄存器写入流程并转换响应。
     auto write_response = ModbusWriteMultipleRegistersResponse{};
-    const auto status = write_multiple_holding_registers(write_request, &write_response, error_message);
+    const auto status = write_multiple_holding_registers_locked(write_request, &write_response, error_message);
     response->write_result = std::move(write_response);
     response->success = response->write_result.success;
     if (!response->success && error_message != nullptr && error_message->empty()) {

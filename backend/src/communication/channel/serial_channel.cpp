@@ -320,7 +320,6 @@ std::size_t modbus_rtu_expected_response_length(
 
 }  // namespace channel_internal
 
-// 构造 SerialChannel 实例。
 SerialChannel::SerialChannel(ChannelConfig config)
     : config_(std::move(config))
 {
@@ -337,7 +336,6 @@ SerialChannel::SerialChannel(ChannelConfig config)
         0);
 }
 
-// 销毁 SerialChannel 实例并释放相关资源。
 SerialChannel::~SerialChannel()
 {
     close();
@@ -366,7 +364,7 @@ StatusCode SerialChannel::open_locked()
     }
 
 #if !defined(__linux__)
-    set_error_locked("串口通道仅支持 Linux");
+    set_error_locked("串口通道仅支持 Linux", DiagnosisErrorCode::kChannelOpenFailed);
     return StatusCode::kInvalidState;
 #else
     if (Logger::debug_enabled()) {
@@ -375,20 +373,20 @@ StatusCode SerialChannel::open_locked()
 
     fd_ = ::open(config_.device_path.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
     if (fd_ < 0) {
-        set_error_locked("打开串口设备失败: " + std::string(std::strerror(errno)));
+        set_error_locked("打开串口设备失败: " + std::string(std::strerror(errno)), DiagnosisErrorCode::kChannelOpenFailed);
         return StatusCode::kIoError;
     }
 
     termios tty{};
     if (tcgetattr(fd_, &tty) != 0) {
-        set_error_locked("读取串口参数失败: " + std::string(std::strerror(errno)));
+        set_error_locked("读取串口参数失败: " + std::string(std::strerror(errno)), DiagnosisErrorCode::kChannelConfigFailed);
         close_locked();
         return StatusCode::kIoError;
     }
 
     const auto speed = to_baud_rate(config_.baud_rate);
     if (speed == 0) {
-        set_error_locked("不支持的波特率: " + std::to_string(config_.baud_rate));
+        set_error_locked("不支持的波特率: " + std::to_string(config_.baud_rate), DiagnosisErrorCode::kChannelConfigFailed);
         close_locked();
         return StatusCode::kInvalidArgument;
     }
@@ -411,7 +409,7 @@ StatusCode SerialChannel::open_locked()
         tty.c_cflag |= CS8;
         break;
     default:
-        set_error_locked("不支持的数据位: " + std::to_string(config_.data_bits));
+        set_error_locked("不支持的数据位: " + std::to_string(config_.data_bits), DiagnosisErrorCode::kChannelConfigFailed);
         close_locked();
         return StatusCode::kInvalidArgument;
     }
@@ -441,7 +439,7 @@ StatusCode SerialChannel::open_locked()
     tty.c_cc[VTIME] = 0;
 
     if (tcsetattr(fd_, TCSANOW, &tty) != 0) {
-        set_error_locked("应用串口参数失败: " + std::string(std::strerror(errno)));
+        set_error_locked("应用串口参数失败: " + std::string(std::strerror(errno)), DiagnosisErrorCode::kChannelConfigFailed);
         close_locked();
         return StatusCode::kIoError;
     }
@@ -685,7 +683,7 @@ StatusCode SerialChannel::transceive(
             return StatusCode::kIoError;
         }
         if (fallback_target_ms > send_deadline_ms) {
-            set_error_locked("等待串口输出完成超时");
+            set_error_locked("等待串口输出完成超时", DiagnosisErrorCode::kModbusTimeout);
             return StatusCode::kTimeout;
         }
         return StatusCode::kOk;
@@ -742,7 +740,7 @@ StatusCode SerialChannel::transceive(
         }
         const auto now = time_utils::steady_now_ms();
         if (now >= send_deadline_ms) {
-            set_error_locked("等待串口输出完成超时");
+            set_error_locked("等待串口输出完成超时", DiagnosisErrorCode::kModbusTimeout);
             return StatusCode::kTimeout;
         }
         int queued_bytes = 0;
@@ -940,7 +938,7 @@ ChannelStatus SerialChannel::status() const
 }
 
 // 在持锁状态下设置错误信息。
-void SerialChannel::set_error_locked(const std::string& error_message)
+void SerialChannel::set_error_locked(const std::string& error_message, DiagnosisErrorCode code)
 {
 #if defined(__linux__)
     if (fd_ >= 0) {
@@ -962,7 +960,7 @@ void SerialChannel::set_error_locked(const std::string& error_message)
         config_.channel_id,
         config_.device_path,
         config_.enabled ? DiagnosisRunStatus::kError : DiagnosisRunStatus::kWarning,
-        classify_channel_error(error_message),
+        code,
         status_.last_receive_time_ms,
         status_.last_change_time_ms,
         status_.consecutive_error_count);

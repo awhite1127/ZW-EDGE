@@ -440,13 +440,11 @@ std::string process_failure_detail(
 
 }  // namespace
 
-// 构造 LinuxTimeRuntime 实例。
 LinuxTimeRuntime::LinuxTimeRuntime()
     : LinuxTimeRuntime(default_runtime_paths())
 {
 }
 
-// 构造 LinuxTimeRuntime 实例。
 LinuxTimeRuntime::LinuxTimeRuntime(Paths paths)
     : paths_(std::move(paths))
 {

@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "shared/common/enums.h"
@@ -30,6 +31,13 @@ struct ChannelConfig {
     std::uint16_t tcp_port{502};
     std::uint32_t connect_timeout_ms{3000};
 };
+
+inline auto channel_transport_key(const ChannelConfig& c)
+{
+    return std::tie(c.channel_id, c.enabled, c.channel_type, c.device_path, c.port_name,
+        c.baud_rate, c.data_bits, c.parity, c.stop_bits, c.response_timeout_ms,
+        c.retry_count, c.tcp_host, c.tcp_port, c.connect_timeout_ms);
+}
 
 // 统一生成通道目标文本，日志、诊断和通讯跟踪必须使用同一套 TCP/串口回退规则。
 // 少数只面向串口的调用点可传入更具体的未配置提示，但不能自行重复拼接目标。

@@ -8,6 +8,8 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
+#include <array>
 
 #include "shared/common/status_code.h"
 #include "data/model/mqtt_settings.h"
@@ -23,11 +25,10 @@ class MqttPublisherService {
 public:
     using SnapshotProvider = std::function<RealtimeViewSnapshot()>;
 
-    // 构造 MqttPublisherService 实例。
     MqttPublisherService();
-    // 构造 MqttPublisherService 实例。
+
     explicit MqttPublisherService(std::unique_ptr<MqttClient> client);
-    // 销毁 MqttPublisherService 实例并释放相关资源。
+
     ~MqttPublisherService();
 
     // 设置实时快照提供器。
@@ -49,6 +50,8 @@ public:
         bool retain,
         std::string* error_message = nullptr,
         std::uint64_t publish_sequence = 0);
+    // 返回 true 表示两类主题均已获 Broker 确认，或用户明确禁用 MQTT。
+    bool deliver_durable_event(const ServiceEvent& event);
     // 发布事件。
     void publish_event(const ServiceEvent& event);
     // 发布告警。
@@ -59,6 +62,8 @@ public:
     MqttRuntimeStatus runtime_status() const;
 
 private:
+    // 事件与告警共享配置快照、世代检查及发布边界。
+    void publish_service_event(const ServiceEvent& event, bool alarm);
     // 在后台循环中维护连接并执行周期发布。
     void publish_loop();
     // 发布状态。
@@ -86,6 +91,12 @@ private:
     bool client_start_pending_{false};
     bool time_reconnect_requested_{false};
     bool client_configuration_valid_{false};
+    struct DurableDelivery {
+        std::uint64_t generation{0};
+        std::array<std::uint64_t, 2> sequences{};
+        std::array<bool, 2> confirmed{};
+    };
+    std::unordered_map<std::string, DurableDelivery> durable_deliveries_;
     std::uint64_t sequence_{1};
     // 两阶段发布在锁外构造载荷；代次用于阻止旧配置载荷经新客户端发布。
     std::uint64_t configuration_generation_{0};

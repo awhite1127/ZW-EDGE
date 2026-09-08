@@ -80,26 +80,33 @@ std::string format_modbus_exception_message(std::uint16_t code, std::size_t code
 // 解析 Modbus RTU 异常响应。
 StatusCode parse_rtu_exception_response(
     const std::vector<std::uint8_t>& response,
-    std::string* error_message)
+    std::string* error_message,
+    DiagnosisErrorCode* diagnosis)
 {
+    if (diagnosis) *diagnosis = DiagnosisErrorCode::kNone;
+    const auto fail = [diagnosis](StatusCode status, DiagnosisErrorCode code) {
+        if (diagnosis) *diagnosis = code;
+        return status;
+    };
+
     if (response.size() == 5) {
         const auto code = static_cast<std::uint16_t>(response[2]);
         if (error_message != nullptr) {
             *error_message = format_modbus_exception_message(code, 1);
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusExceptionResponse);
     }
     if (response.size() == 6) {
         const auto code = read_u16_be(response, 2);
         if (error_message != nullptr) {
             *error_message = format_modbus_exception_message(code, 2);
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusExceptionResponse);
     }
     if (error_message != nullptr) {
         *error_message = "Modbus 异常响应长度不匹配";
     }
-    return StatusCode::kProtocolError;
+    return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusLengthInvalid);
 }
 
 }  // namespace
@@ -192,13 +199,20 @@ StatusCode ModbusRtuProtocol::parse_read_registers_response(
     std::uint16_t expected_register_count,
     const std::vector<std::uint8_t>& response,
     std::vector<std::uint16_t>* registers,
-    std::string* error_message)
+    std::string* error_message,
+    DiagnosisErrorCode* diagnosis)
 {
+    if (diagnosis) *diagnosis = DiagnosisErrorCode::kNone;
+    const auto fail = [diagnosis](StatusCode status, DiagnosisErrorCode code) {
+        if (diagnosis) *diagnosis = code;
+        return status;
+    };
+
     if (registers == nullptr) {
         if (error_message != nullptr) {
             *error_message = "寄存器输出参数为空";
         }
-        return StatusCode::kInvalidArgument;
+        return fail(StatusCode::kInvalidArgument, DiagnosisErrorCode::kConfigInvalid);
     }
 
     registers->clear();
@@ -207,20 +221,20 @@ StatusCode ModbusRtuProtocol::parse_read_registers_response(
         if (error_message != nullptr) {
             *error_message = "读取寄存器功能码只支持 FC03 或 FC04";
         }
-        return StatusCode::kInvalidArgument;
+        return fail(StatusCode::kInvalidArgument, DiagnosisErrorCode::kConfigInvalid);
     }
     if (expected_register_count == 0 || expected_register_count > kMaxReadRegisterCount) {
         if (error_message != nullptr) {
             *error_message = "单次读取寄存器数量超出范围，允许范围为 1-125";
         }
-        return StatusCode::kInvalidArgument;
+        return fail(StatusCode::kInvalidArgument, DiagnosisErrorCode::kConfigInvalid);
     }
 
     if (response.size() < 5) {
         if (error_message != nullptr) {
             *error_message = "响应帧长度过短";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusLengthInvalid);
     }
 
     const bool is_expected_exception =
@@ -238,7 +252,7 @@ StatusCode ModbusRtuProtocol::parse_read_registers_response(
                       " 字节，实际 " + std::to_string(response.size()) + " 字节"
                 : "响应帧长度不匹配";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusLengthInvalid);
     }
 
     // 只有确认标准响应帧完整后，才把末尾两字节作为 CRC 执行校验。
@@ -250,25 +264,25 @@ StatusCode ModbusRtuProtocol::parse_read_registers_response(
         if (error_message != nullptr) {
             *error_message = "CRC 校验失败";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusCrcError);
     }
 
     if (response[0] != expected_slave_address) {
         if (error_message != nullptr) {
             *error_message = "从站地址不匹配";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusAddressMismatch);
     }
 
     if (is_expected_exception) {
-        return parse_rtu_exception_response(response, error_message);
+        return parse_rtu_exception_response(response, error_message, diagnosis);
     }
 
     if (response[1] != expected_function_code) {
         if (error_message != nullptr) {
             *error_message = "功能码不匹配";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusFunctionMismatch);
     }
 
     const auto expected_byte_count = static_cast<std::size_t>(expected_register_count) * 2U;
@@ -276,7 +290,7 @@ StatusCode ModbusRtuProtocol::parse_read_registers_response(
         if (error_message != nullptr) {
             *error_message = "字节数不匹配";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusLengthInvalid);
     }
 
     // FC03/FC04 数据区都按大端字节序拼成同一 16 位寄存器数组。
@@ -297,7 +311,8 @@ StatusCode ModbusRtuProtocol::parse_read_holding_registers_response(
     std::uint16_t expected_register_count,
     const std::vector<std::uint8_t>& response,
     std::vector<std::uint16_t>* registers,
-    std::string* error_message)
+    std::string* error_message,
+    DiagnosisErrorCode* diagnosis)
 {
     return parse_read_registers_response(
         expected_slave_address,
@@ -305,7 +320,7 @@ StatusCode ModbusRtuProtocol::parse_read_holding_registers_response(
         expected_register_count,
         response,
         registers,
-        error_message);
+        error_message, diagnosis);
 }
 
 // 解析 Modbus RTU 写多个保持寄存器响应帧。
@@ -314,20 +329,27 @@ StatusCode ModbusRtuProtocol::parse_write_multiple_holding_registers_response(
     std::uint16_t expected_start_register,
     std::uint16_t expected_register_count,
     const std::vector<std::uint8_t>& response,
-    std::string* error_message)
+    std::string* error_message,
+    DiagnosisErrorCode* diagnosis)
 {
+    if (diagnosis) *diagnosis = DiagnosisErrorCode::kNone;
+    const auto fail = [diagnosis](StatusCode status, DiagnosisErrorCode code) {
+        if (diagnosis) *diagnosis = code;
+        return status;
+    };
+
     if (expected_register_count == 0 || expected_register_count > kMaxWriteMultipleRegisterCount) {
         if (error_message != nullptr) {
             *error_message = "单次写多个保持寄存器数量超出范围，允许范围为 1-123";
         }
-        return StatusCode::kInvalidArgument;
+        return fail(StatusCode::kInvalidArgument, DiagnosisErrorCode::kConfigInvalid);
     }
 
     if (response.size() < 5) {
         if (error_message != nullptr) {
             *error_message = "响应帧长度过短";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusLengthInvalid);
     }
 
     const bool is_write_exception = response[1] ==
@@ -342,7 +364,7 @@ StatusCode ModbusRtuProtocol::parse_write_multiple_holding_registers_response(
                       " 字节，实际 " + std::to_string(response.size()) + " 字节"
                 : "响应帧长度不匹配";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusLengthInvalid);
     }
 
     const auto expected_crc = crc16_prefix(response, response.size() - 2U);
@@ -353,25 +375,25 @@ StatusCode ModbusRtuProtocol::parse_write_multiple_holding_registers_response(
         if (error_message != nullptr) {
             *error_message = "CRC 校验失败";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusCrcError);
     }
 
     if (response[0] != expected_slave_address) {
         if (error_message != nullptr) {
             *error_message = "从站地址不匹配";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusAddressMismatch);
     }
 
     if (is_write_exception) {
-        return parse_rtu_exception_response(response, error_message);
+        return parse_rtu_exception_response(response, error_message, diagnosis);
     }
 
     if (response[1] != kWriteMultipleHoldingRegistersFunction) {
         if (error_message != nullptr) {
             *error_message = "功能码不匹配";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusFunctionMismatch);
     }
 
     const auto start_register = read_u16_be(response, 2);
@@ -380,14 +402,14 @@ StatusCode ModbusRtuProtocol::parse_write_multiple_holding_registers_response(
         if (error_message != nullptr) {
             *error_message = "起始寄存器地址不匹配";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusWriteEchoMismatch);
     }
 
     if (register_count != expected_register_count) {
         if (error_message != nullptr) {
             *error_message = "写入寄存器数量不匹配";
         }
-        return StatusCode::kProtocolError;
+        return fail(StatusCode::kProtocolError, DiagnosisErrorCode::kModbusWriteEchoMismatch);
     }
 
     return StatusCode::kOk;

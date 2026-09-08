@@ -26,7 +26,7 @@ class ConfigImportTransaction;
 
 class ConfigStore {
 public:
-    // 销毁 ConfigStore 实例并释放相关资源。
+
     ~ConfigStore();
 
     // 初始化配置 SQLite 存储并创建必要表结构。

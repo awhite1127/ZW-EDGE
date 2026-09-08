@@ -7,10 +7,20 @@
 #include "shared/common/time_utils.h"
 
 #include <algorithm>
+#include <map>
 
 namespace edge_controller {
 
 namespace {
+
+std::string communication_resource_key(const ChannelConfig& config)
+{
+return config.channel_type == ChannelType::kModbusRtuSerial
+            ? (!config.device_path.empty()
+                   ? "serial:" + config.device_path
+                   : (!config.port_name.empty() ? "serial:" + config.port_name : "channel:" + config.channel_id))
+            : "channel:" + config.channel_id;
+}
 
 // 计算指定时间点至今的毫秒数。
 std::uint32_t elapsed_ms_since(TimestampMs started_at_ms)
@@ -33,7 +43,7 @@ std::string serial_config_text(const ChannelConfig& config)
 // 根据配置初始化通道实例集合。
 StatusCode ChannelManager::initialize(const std::vector<ChannelConfig>& channels, std::string* error_message)
 {
-    std::unordered_map<ChannelId, std::unique_ptr<IChannel>> next_channels;
+    std::unordered_map<ChannelId, std::shared_ptr<IChannel>> next_channels;
     std::unordered_map<ChannelId, std::shared_ptr<std::mutex>> next_communication_mutexes;
     std::unordered_map<std::string, std::shared_ptr<std::mutex>> mutexes_by_resource;
     next_channels.reserve(channels.size());
@@ -58,11 +68,7 @@ StatusCode ChannelManager::initialize(const std::vector<ChannelConfig>& channels
             return StatusCode::kInvalidArgument;
         }
 
-        const auto resource_key = config.channel_type == ChannelType::kModbusRtuSerial
-            ? (!config.device_path.empty()
-                   ? "serial:" + config.device_path
-                   : (!config.port_name.empty() ? "serial:" + config.port_name : "channel:" + config.channel_id))
-            : "channel:" + config.channel_id;
+        const auto resource_key = communication_resource_key(config);
         auto& resource_mutex = mutexes_by_resource[resource_key];
         if (resource_mutex == nullptr) {
             resource_mutex = std::make_shared<std::mutex>();
@@ -70,6 +76,9 @@ StatusCode ChannelManager::initialize(const std::vector<ChannelConfig>& channels
         next_communication_mutexes[config.channel_id] = resource_mutex;
     }
 
+    generations_.clear();
+    for (const auto& config : channels) generations_[config.channel_id] = 1;
+    resource_mutexes_ = std::move(mutexes_by_resource);
     channels_ = std::move(next_channels);
     communication_mutexes_ = std::move(next_communication_mutexes);
     return StatusCode::kOk;
@@ -254,15 +263,91 @@ StatusCode ChannelManager::prepare_rtu_channel_for_collection(
 ChannelManager::CommunicationLease ChannelManager::acquire_communication_lease(
     const ChannelId& channel_id)
 {
-    const auto iterator = communication_mutexes_.find(channel_id);
-    if (iterator == communication_mutexes_.end() || iterator->second == nullptr) {
-        return {};
+    for (;;) {
+        std::shared_ptr<std::mutex> resource;
+        {
+            std::shared_lock<std::shared_mutex> index_lock(*index_mutex_);
+            const auto iterator = communication_mutexes_.find(channel_id);
+            if (iterator == communication_mutexes_.end()) return {};
+            resource = iterator->second;
+        }
+        CommunicationLease lease(resource);
+        // 等待期间配置可能已将通道重绑定到另一物理资源。
+        std::shared_lock<std::shared_mutex> index_lock(*index_mutex_);
+        const auto current = communication_mutexes_.find(channel_id);
+        if (current == communication_mutexes_.end()) return {};
+        if (current->second == resource) return lease;
     }
-    return CommunicationLease(*iterator->second);
+}
+
+StatusCode ChannelManager::apply_channels(const std::vector<ChannelConfig>& configs,
+    const std::function<StatusCode()>& persist, std::string* error)
+{
+    decltype(channels_) next_channels;
+    decltype(communication_mutexes_) next_mutexes;
+    decltype(resource_mutexes_) next_resources;
+    decltype(generations_) next_generations;
+    std::map<std::mutex*, std::shared_ptr<std::mutex>> affected_resources;
+    std::vector<std::shared_ptr<IChannel>> retired;
+    {
+        std::shared_lock<std::shared_mutex> index_lock(*index_mutex_);
+        for (const auto& config : configs) {
+            const auto key = communication_resource_key(config);
+            auto& resource = next_resources[key];
+            if (!resource) {
+                const auto old = resource_mutexes_.find(key);
+                resource = old == resource_mutexes_.end() ? std::make_shared<std::mutex>() : old->second;
+            }
+            next_mutexes[config.channel_id] = resource;
+            const auto previous = channels_.find(config.channel_id);
+            if (previous != channels_.end() && channel_transport_key(previous->second->config()) == channel_transport_key(config)) {
+                next_channels[config.channel_id] = previous->second;
+                next_generations[config.channel_id] = generations_.at(config.channel_id);
+                continue;
+            }
+            if (config.channel_type == ChannelType::kModbusRtuSerial)
+                next_channels[config.channel_id] = std::make_shared<SerialChannel>(config);
+            else if (config.channel_type == ChannelType::kModbusTcp)
+                next_channels[config.channel_id] = std::make_shared<TcpChannel>(config);
+            else { if (error) *error = "不支持的通道类型"; return StatusCode::kInvalidArgument; }
+            next_generations[config.channel_id] = previous == channels_.end() ? 1 : generations_.at(config.channel_id) + 1;
+            affected_resources[resource.get()] = resource;
+        }
+        for (const auto& old : channels_) {
+            const auto current = next_channels.find(old.first);
+            if (current != next_channels.end() && current->second == old.second) continue;
+            const auto resource = communication_mutexes_.at(old.first);
+            affected_resources[resource.get()] = resource;
+            retired.push_back(old.second);
+        }
+    }
+    // 所有分配均在提交前完成；只等待改变涉及的旧/新物理资源。
+    std::vector<CommunicationLease> leases;
+    leases.reserve(affected_resources.size());
+    for (const auto& resource : affected_resources) leases.emplace_back(resource.second);
+    const auto status = persist();
+    if (!is_ok(status)) return status;
+    {
+        std::unique_lock<std::shared_mutex> index_lock(*index_mutex_);
+        channels_.swap(next_channels);
+        communication_mutexes_.swap(next_mutexes);
+        resource_mutexes_.swap(next_resources);
+        generations_.swap(next_generations);
+    }
+    for (const auto& old : retired) old->close();
+    return StatusCode::kOk;
+}
+
+std::uint64_t ChannelManager::generation(const ChannelId& id) const
+{
+    std::shared_lock<std::shared_mutex> lock(*index_mutex_);
+    const auto found = generations_.find(id);
+    return found == generations_.end() ? 0 : found->second;
 }
 
 IChannel* ChannelManager::get_channel(const ChannelId& channel_id)
 {
+    std::shared_lock<std::shared_mutex> index_lock(*index_mutex_);
     const auto iterator = channels_.find(channel_id);
     if (iterator == channels_.end()) {
         return nullptr;
@@ -272,6 +357,7 @@ IChannel* ChannelManager::get_channel(const ChannelId& channel_id)
 
 const ChannelStatus* ChannelManager::get_channel_status(const ChannelId& channel_id) const
 {
+    std::shared_lock<std::shared_mutex> index_lock(*index_mutex_);
     const auto iterator = channels_.find(channel_id);
     if (iterator == channels_.end()) {
         return nullptr;
@@ -283,6 +369,7 @@ const ChannelStatus* ChannelManager::get_channel_status(const ChannelId& channel
 
 std::vector<ChannelStatus> ChannelManager::snapshot_statuses() const
 {
+    std::shared_lock<std::shared_mutex> index_lock(*index_mutex_);
     std::vector<ChannelStatus> statuses;
     statuses.reserve(channels_.size());
 

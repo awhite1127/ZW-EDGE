@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <mutex>
+#include <map>
 #include <optional>
 #include <shared_mutex>
 #include <string>
@@ -22,6 +23,8 @@ public:
     // 初始化。
     void initialize(const SystemConfig& system_config);
 
+    void update_device_names(const std::vector<DeviceConfig>& devices);
+    void reconcile_channels(const std::vector<ChannelConfig>& channels);
     // 更新通道状态。
     void update_channel_status(const ChannelStatus& status);
     // 更新主站状态。
@@ -72,7 +75,13 @@ public:
     // 获取系统状态。
     SystemStatus get_system_status() const;
 
+    // 使用单调时钟判定新鲜度；停采时立即撤销所有 good 点位。
+    std::vector<DeviceStatus> expire_device_values(bool stopped = false, const std::vector<MasterNodeId>* masters = nullptr);
+
 private:
+    void update_device_status_locked(const DeviceStatus& status);
+    std::map<std::pair<DeviceId, std::string>, std::pair<TimestampMs, TimestampMs>> freshness_deadlines_;
+    std::unordered_map<MasterNodeId, TimestampMs> freshness_ttl_by_master_;
     // 在持锁状态下重建系统状态。
     void rebuild_system_status_locked();
     // 在持锁状态下刷新通道状态列表。
@@ -81,8 +90,6 @@ private:
     void refresh_master_status_list_locked();
     // 在持锁状态下刷新设备状态列表。
     void refresh_device_status_list_locked();
-    // 在持锁状态下更新设备实时数据。
-    void update_device_realtime_locked(const DeviceStatus& status);
 
     // 采集线程写入、IPC 线程读取：写操作保持 map、顺序列表、索引表和在线计数在同一临界区同步更新。
     // 读取接口始终返回值快照，调用方不得持有指向仓库内部元素的引用或指针。
@@ -90,7 +97,7 @@ private:
     std::unordered_map<ChannelId, ChannelStatus> channel_status_by_id_;
     std::unordered_map<MasterNodeId, MasterNodeStatus> master_status_by_id_;
     std::unordered_map<DeviceId, DeviceStatus> device_status_by_id_;
-    std::unordered_map<DeviceId, DeviceRealtimeSnapshot> device_realtime_by_id_;
+    std::unordered_map<DeviceId, std::string> device_names_;
     std::unordered_map<MasterNodeId, std::vector<DeviceId>> device_ids_by_master_;
     // 三张索引表定位 SystemStatus 中的稳定顺序槽位，使单对象更新无需重建整张展示列表。
     std::unordered_map<ChannelId, std::size_t> channel_status_index_by_id_;

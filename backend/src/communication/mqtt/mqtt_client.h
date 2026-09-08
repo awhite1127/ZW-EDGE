@@ -14,7 +14,7 @@ namespace edge_controller {
 
 class MqttClient {
 public:
-    // 销毁 MqttClient 实例并释放相关资源。
+
     virtual ~MqttClient() = default;
 
     // 校验并应用 MQTT 客户端配置。
@@ -33,6 +33,9 @@ public:
         bool retain,
         std::string* error_message = nullptr,
         std::uint64_t publish_sequence = 0) = 0;
+    // 可靠事件使用非零 sequence 查询 Broker 确认；默认客户端不声称已确认。
+    virtual bool consume_publish_ack(std::uint64_t) { return false; }
+    virtual void forget_publish(std::uint64_t) {}
     // 获取当前运行状态。
     virtual MqttRuntimeStatus runtime_status() const = 0;
 };

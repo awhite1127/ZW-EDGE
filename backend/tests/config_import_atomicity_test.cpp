@@ -149,6 +149,17 @@ int main()
     ConfigStore config_store;
     auto status = config_store.initialize(paths.config_database(), &error);
     if (!is_ok(status)) return fail("could not initialize ConfigStore: " + error);
+    // 旧版本只增加 outbox 表，既有配置保留；重开后迁移必须幂等。
+    {
+        SqliteConnection migration;
+        if (!migration.open(paths.config_database(), &error) ||
+            !migration.execute("DROP TABLE alarm_event_outbox; PRAGMA user_version=9;", &error)) return fail(error);
+        if (!is_ok(config_store.initialize(paths.config_database(), &error))) return fail("v9 migration failed: " + error);
+        std::int64_t version = 0;
+        if (!migration.scalar_int64("PRAGMA user_version;", &version, &error) || version != 10) return fail("migration version mismatch");
+        if (!is_ok(config_store.initialize(paths.config_database(), &error))) return fail("migration reopen failed: " + error);
+    }
+
 
     edge_controller::SystemSettings baseline_system;
     status = config_store.load_or_initialize_system_settings(&baseline_system, &error);

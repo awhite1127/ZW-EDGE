@@ -147,18 +147,16 @@ constexpr mode_t kIpcSocketBindUmask = S_IXUSR | S_IXGRP | S_IRWXO;
 
 class ScopedUmask {
 public:
-    // 构造 ScopedUmask 实例。
+
     explicit ScopedUmask(mode_t mask)
         : previous_(::umask(mask))
     {
     }
 
-    // 构造 ScopedUmask 实例。
     ScopedUmask(const ScopedUmask&) = delete;
     // 移动赋值对象并转移其资源所有权。
     ScopedUmask& operator=(const ScopedUmask&) = delete;
 
-    // 销毁 ScopedUmask 实例并释放相关资源。
     ~ScopedUmask()
     {
         ::umask(previous_);
@@ -431,14 +429,12 @@ StatusCode write_exact(int fd, const std::uint8_t* buffer, std::size_t length, c
 
 }  // namespace
 
-// 构造 BackendIpcServer 实例。
 BackendIpcServer::BackendIpcServer(BackendService* backend_service, std::string socket_path)
     : backend_service_(backend_service),
       socket_path_(std::move(socket_path))
 {
 }
 
-// 销毁 BackendIpcServer 实例并释放相关资源。
 BackendIpcServer::~BackendIpcServer()
 {
     stop();

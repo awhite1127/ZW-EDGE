@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "application/service/ordered_task_queue.h"
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -30,18 +31,6 @@ namespace edge_controller {
 class AlarmEvaluator;
 
 namespace polling_service_internal {
-
-// 生成 RTU worker 的物理总线键。同一路径必须落入同一 worker；缺失路径的异常配置按通道隔离。
-inline std::string rtu_physical_worker_key(const ChannelConfig& channel)
-{
-    if (!channel.device_path.empty()) {
-        return "serial:" + channel.device_path;
-    }
-    if (!channel.port_name.empty()) {
-        return "serial:" + channel.port_name;
-    }
-    return "channel:" + channel.channel_id;
-}
 
 // 在线程规划和创建前校验配置容量，防止绕过配置入口的异常配置放大 worker 数量。
 inline StatusCode validate_polling_start_channel_limits(
@@ -84,24 +73,23 @@ public:
         TimestampMs timestamp_ms)>;
     using DeviceStatusUpdateCallback = std::function<void(const std::vector<DeviceStatus>&)>;
 
-    // 构造 PollingService 实例。
     PollingService(
-        const SystemConfig* system_config,
-        TopologyManager* topology_manager,
-        ChannelManager* channel_manager,
-        DataStore* data_store,
+        const SystemConfig& system_config,
+        ChannelManager& channel_manager,
+        DataStore& data_store,
         HistoryStore* history_store,
         CommunicationTraceStore* communication_trace_store,
         AlarmEvaluator* alarm_evaluator,
         std::uint32_t poll_interval_ms,
         ErrorEventCallback error_event_callback = {});
-    // 销毁 PollingService 实例并释放相关资源。
+
     ~PollingService();
 
     // 启动轮询线程。
     StatusCode start();
     // 请求停止并等待轮询线程退出。
     void stop();
+    void invalidate_channels(const std::vector<ChannelConfig>& previous, const std::vector<ChannelConfig>& next);
     // 判断轮询服务是否正在运行。
     bool is_running() const;
     // 获取最近一轮轮询摘要。
@@ -168,19 +156,22 @@ private:
     std::vector<DeviceStatus> mark_devices_collect_failed(
         const MasterPollingTarget& target,
         TimestampMs failure_time_ms,
-        const std::string& error_message);
+        const std::string& error_message,
+    DiagnosisErrorCode error_code);
     // 构造设备失败态，不清空历史业务值，只把本次状态改为失败。
     std::vector<DeviceStatus> build_failed_device_statuses(
         const std::vector<const DeviceConfig*>& devices,
         TimestampMs failure_time_ms,
-        const std::string& error_message) const;
+        const std::string& error_message,
+    DiagnosisErrorCode error_code) const;
     // 以缓存中的旧状态为基底，合并本次要写入的设备状态。
     std::vector<DeviceStatus> prepare_device_statuses_for_store(
         const std::vector<DeviceStatus>& statuses) const;
     // 写入历史数据记录。
     void write_history_records(
         const MasterNodeConfig& master_config,
-        const std::vector<DeviceStatus>& statuses);
+        const std::vector<DeviceStatus>& statuses,
+        std::uint64_t time_generation);
     // 批量收集历史记录并按节流策略决定是否写入，整批只获取一次节流锁。
     void collect_history_records_for_write(
         const std::vector<HistoryRecord>& records,
@@ -197,10 +188,6 @@ private:
     void update_channel_status(const ChannelId& channel_id);
     // 通道工作线程：同一通道内串行采集，不同通道 worker 并行。
     void channel_worker_loop(ChannelId channel_id, std::vector<MasterPollingTarget> targets);
-    // RTU 物理总线工作线程：同一路径内的通道串行，不同串口路径由不同 worker 并行。
-    void rtu_worker_loop(
-        std::string physical_worker_key,
-        std::map<ChannelId, std::vector<MasterPollingTarget>> targets_by_channel);
     // 汇总各通道最近周期结果并发布到 DataStore。
     void publish_aggregate_status(bool polling_running, const std::string& polling_state, const std::string& status_message);
     // 同步轮询状态到 DataStore 和本地摘要缓存。
@@ -237,7 +224,6 @@ private:
         std::string error_message;
     };
 
-    // 执行 operator< 运算符对应的对象操作。
     struct HistoryWriteThrottleKey {
         DeviceId device_id;
         std::string point_key;
@@ -247,14 +233,22 @@ private:
         bool operator<(const HistoryWriteThrottleKey& other) const;
     };
 
-    const SystemConfig* system_config_{nullptr};
-    TopologyManager* topology_manager_{nullptr};
-    ChannelManager* channel_manager_{nullptr};
-    DataStore* data_store_{nullptr};
+    // 必需依赖由 BackendService 持有，生命周期覆盖所有 worker 和停止回收。
+    const SystemConfig system_config_;
+    ChannelManager& channel_manager_;
+    DataStore& data_store_;
     HistoryStore* history_store_{nullptr};
     CommunicationTraceStore* communication_trace_store_{nullptr};
     AlarmEvaluator* alarm_evaluator_{nullptr};
-    // 当前版本只支持全局统一轮询周期。
+    bool publish_device_statuses(const std::vector<DeviceStatus>& statuses,
+        const ChannelId& channel = {}, std::uint64_t generation = 0);
+    void expire_device_values(bool stopped);
+    void freshness_worker_loop();
+    std::mutex publication_mutex_;
+    std::thread freshness_worker_;
+    std::mutex persistence_epoch_mutex_;
+    OrderedTaskQueue persistence_queue_;
+    // worker 等待粒度；各主站仍按自身周期调度。
     std::uint32_t poll_interval_ms_{1000};
     ErrorEventCallback error_event_callback_{};
     mutable std::mutex device_status_callback_mutex_;

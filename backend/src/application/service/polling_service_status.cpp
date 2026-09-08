@@ -26,13 +26,9 @@ using namespace polling_service_internal;
 // 同步指定通道的最新运行状态。
 void PollingService::update_channel_status(const ChannelId& channel_id)
 {
-    if (channel_manager_ == nullptr || data_store_ == nullptr) {
-        return;
-    }
-
-    const auto* channel_status = channel_manager_->get_channel_status(channel_id);
+    const auto* channel_status = channel_manager_.get_channel_status(channel_id);
     if (channel_status != nullptr) {
-        data_store_->update_channel_status(*channel_status);
+        data_store_.update_channel_status(*channel_status);
     }
 }
 
@@ -109,9 +105,7 @@ void PollingService::update_polling_status(
 {
     DiagnosisStatus diagnosis;
     if (has_error) {
-        const auto object_diagnosis = data_store_ == nullptr
-                                          ? DiagnosisStatus{}
-                                          : data_store_->get_current_object_diagnosis();
+        const auto object_diagnosis = data_store_.get_current_object_diagnosis();
         diagnosis = diagnosis_has_issue(object_diagnosis)
                         ? object_diagnosis
                         : make_diagnosis(
@@ -119,10 +113,11 @@ void PollingService::update_polling_status(
             "polling",
             "轮询服务",
             DiagnosisRunStatus::kError,
-            classify_error_or_unknown(error_message),
+            DiagnosisErrorCode::kUnknownError,
             0,
             cycle_finished_at_ms != 0 ? cycle_finished_at_ms : time_utils::system_now_ms(),
             0);
+        if (!diagnosis_has_issue(object_diagnosis) && !error_message.empty()) diagnosis.message = error_message;
     } else if (polling_running) {
         diagnosis = make_normal_diagnosis(
             DiagnosisLevel::kSystem,
@@ -167,10 +162,8 @@ void PollingService::update_polling_status(
         summary_snapshot = last_cycle_summary_;
     }
 
-    if (data_store_ != nullptr) {
-        // 只同步轮询标量，不再复制包含全部对象状态的 SystemStatus。
-        data_store_->update_polling_summary(summary_snapshot, status_message);
-    }
+    // 只同步轮询标量，不再复制包含全部对象状态的 SystemStatus。
+    data_store_.update_polling_summary(summary_snapshot, status_message);
 }
 
 }  // namespace edge_controller

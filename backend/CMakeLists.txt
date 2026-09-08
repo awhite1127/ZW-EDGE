@@ -122,6 +122,7 @@ add_library(edge_controller_core STATIC
     src/data/model/diagnosis_status.cpp
     src/data/model/device_value_status.cpp
     src/data/model/alarm_validation.cpp
+    src/data/model/device_derivation.cpp
     src/data/model/device_template.cpp
     src/data/model/builtin_device_templates.cpp
     src/data/model/builtin_wired_devices.cpp
@@ -155,6 +156,8 @@ add_library(edge_controller_core STATIC
     src/application/service/backend_network_config.cpp
     src/application/service/backend_settings.cpp
     src/application/service/backend_system_overview.cpp
+    src/application/service/update_service.cpp
+    src/application/service/runtime_config_compiler.cpp
     src/application/service/backend_update.cpp
     src/application/service/backend_time_settings.cpp
     src/application/service/backend_time_change.cpp
@@ -234,153 +237,44 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     )
 endif()
 
+set(edge_controller_targets edge_controller_core ${PROJECT_NAME})
 option(EDGE_CONTROLLER_BUILD_TESTS "Build edge-controller backend tests" OFF)
 if(EDGE_CONTROLLER_BUILD_TESTS)
     enable_testing()
-    add_executable(edge_controller_modbus_integration_test
-        tests/modbus_server_integration_test.cpp
-    )
-    target_compile_features(edge_controller_modbus_integration_test PRIVATE cxx_std_17)
-    target_link_libraries(edge_controller_modbus_integration_test
-        PRIVATE edge_controller_core Threads::Threads
-    )
-    add_test(
-        NAME edge_controller_modbus_integration
-        COMMAND edge_controller_modbus_integration_test
-    )
-    set_tests_properties(edge_controller_modbus_integration PROPERTIES TIMEOUT 30)
 
-    add_executable(edge_controller_config_import_atomicity_test
-        tests/config_import_atomicity_test.cpp
-    )
-    target_compile_features(edge_controller_config_import_atomicity_test PRIVATE cxx_std_17)
-    target_include_directories(edge_controller_config_import_atomicity_test
-        PRIVATE ${PROJECT_SOURCE_DIR}/third_party/sqlite
-    )
-    target_link_libraries(edge_controller_config_import_atomicity_test
-        PRIVATE edge_controller_core Threads::Threads
-    )
-    add_test(
-        NAME edge_controller_config_import_atomicity
-        COMMAND edge_controller_config_import_atomicity_test
-    )
-    set_tests_properties(edge_controller_config_import_atomicity PROPERTIES TIMEOUT 30)
+    # 测试统一链接生产核心库，并共享警告、超时和 SQLite 头文件设置。
+    function(edge_controller_add_test name source)
+        set(target "${name}_test")
+        add_executable(${target} ${source})
+        target_compile_features(${target} PRIVATE cxx_std_17)
+        target_include_directories(${target} PRIVATE ${PROJECT_SOURCE_DIR}/third_party/sqlite)
+        target_link_libraries(${target} PRIVATE edge_controller_core Threads::Threads)
+        if(ARGN)
+            add_test(NAME ${name} COMMAND ${ARGN})
+        else()
+            add_test(NAME ${name} COMMAND ${target})
+        endif()
+        set_tests_properties(${name} PROPERTIES TIMEOUT 30)
+        set(edge_controller_targets ${edge_controller_targets} ${target} PARENT_SCOPE)
+    endfunction()
 
-    add_executable(edge_controller_event_store_query_test
-        tests/event_store_query_test.cpp
-    )
-    target_compile_features(edge_controller_event_store_query_test PRIVATE cxx_std_17)
-    target_link_libraries(edge_controller_event_store_query_test
-        PRIVATE edge_controller_core Threads::Threads
-    )
-    add_test(
-        NAME edge_controller_event_store_query
-        COMMAND edge_controller_event_store_query_test
-    )
-    set_tests_properties(edge_controller_event_store_query PROPERTIES TIMEOUT 30)
-
-    add_executable(edge_controller_data_store_realtime_snapshot_test
-        tests/data_store_realtime_snapshot_test.cpp
-    )
-    target_compile_features(edge_controller_data_store_realtime_snapshot_test PRIVATE cxx_std_17)
-    target_link_libraries(edge_controller_data_store_realtime_snapshot_test
-        PRIVATE edge_controller_core Threads::Threads
-    )
-    add_test(
-        NAME edge_controller_data_store_realtime_snapshot
-        COMMAND edge_controller_data_store_realtime_snapshot_test
-    )
-    set_tests_properties(edge_controller_data_store_realtime_snapshot PROPERTIES TIMEOUT 30)
-
-    add_executable(edge_controller_alarm_evaluator_batch_test
-        tests/alarm_evaluator_batch_test.cpp
-    )
-    target_compile_features(edge_controller_alarm_evaluator_batch_test PRIVATE cxx_std_17)
-    target_include_directories(edge_controller_alarm_evaluator_batch_test
-        PRIVATE ${PROJECT_SOURCE_DIR}/third_party/sqlite
-    )
-    target_link_libraries(edge_controller_alarm_evaluator_batch_test
-        PRIVATE edge_controller_core Threads::Threads
-    )
-    add_test(
-        NAME edge_controller_alarm_evaluator_batch
-        COMMAND edge_controller_alarm_evaluator_batch_test
-    )
-    set_tests_properties(edge_controller_alarm_evaluator_batch PROPERTIES TIMEOUT 30)
-
-    add_executable(edge_controller_alarm_rule_validation_test
-        tests/alarm_rule_validation_test.cpp
-    )
-    target_compile_features(edge_controller_alarm_rule_validation_test PRIVATE cxx_std_17)
-    target_link_libraries(edge_controller_alarm_rule_validation_test
-        PRIVATE edge_controller_core Threads::Threads
-    )
-    add_test(
-        NAME edge_controller_alarm_rule_validation
-        COMMAND edge_controller_alarm_rule_validation_test
-    )
-    set_tests_properties(edge_controller_alarm_rule_validation PROPERTIES TIMEOUT 30)
-
-    add_executable(edge_controller_device_value_status_test
-        tests/device_value_status_test.cpp
-    )
-    target_compile_features(edge_controller_device_value_status_test PRIVATE cxx_std_17)
-    target_link_libraries(edge_controller_device_value_status_test
-        PRIVATE edge_controller_core Threads::Threads
-    )
-    add_test(
-        NAME edge_controller_device_value_status
-        COMMAND edge_controller_device_value_status_test
-    )
-    set_tests_properties(edge_controller_device_value_status PROPERTIES TIMEOUT 30)
-
-    add_executable(edge_controller_history_store_test
-        tests/history_store_test.cpp
-    )
-    target_compile_features(edge_controller_history_store_test PRIVATE cxx_std_17)
-    target_include_directories(edge_controller_history_store_test
-        PRIVATE ${PROJECT_SOURCE_DIR}/third_party/sqlite
-    )
-    target_link_libraries(edge_controller_history_store_test
-        PRIVATE edge_controller_core Threads::Threads
-    )
-    add_test(
-        NAME edge_controller_history_store
-        COMMAND edge_controller_history_store_test
-    )
-    set_tests_properties(edge_controller_history_store PROPERTIES TIMEOUT 30)
-
-    add_executable(edge_controller_bounded_address_resolver_integration_test
+    edge_controller_add_test(edge_controller_modbus_integration tests/modbus_server_integration_test.cpp)
+    edge_controller_add_test(edge_controller_config_import_atomicity tests/config_import_atomicity_test.cpp)
+    edge_controller_add_test(edge_controller_event_store_query tests/event_store_query_test.cpp)
+    edge_controller_add_test(edge_controller_data_store_realtime_snapshot tests/data_store_realtime_snapshot_test.cpp)
+    edge_controller_add_test(edge_controller_alarm_evaluator_batch tests/alarm_evaluator_batch_test.cpp)
+    edge_controller_add_test(edge_controller_alarm_rule_validation tests/alarm_rule_validation_test.cpp)
+    edge_controller_add_test(edge_controller_device_value_status tests/device_value_status_test.cpp)
+    edge_controller_add_test(edge_controller_history_store tests/history_store_test.cpp)
+    edge_controller_add_test(edge_controller_bounded_address_resolver_integration
         tests/bounded_address_resolver_integration_test.cpp
-    )
-    target_compile_features(edge_controller_bounded_address_resolver_integration_test PRIVATE cxx_std_17)
-    target_link_libraries(edge_controller_bounded_address_resolver_integration_test
-        PRIVATE edge_controller_core Threads::Threads
+        ${CMAKE_COMMAND} -E env
+        "EDGE_CONTROLLER_RESOLVER_HELPER=$<TARGET_FILE:${PROJECT_NAME}>"
+        "$<TARGET_FILE:edge_controller_bounded_address_resolver_integration_test>"
     )
     add_dependencies(edge_controller_bounded_address_resolver_integration_test ${PROJECT_NAME})
-    add_test(
-        NAME edge_controller_bounded_address_resolver_integration
-        COMMAND ${CMAKE_COMMAND} -E env
-            "EDGE_CONTROLLER_RESOLVER_HELPER=$<TARGET_FILE:${PROJECT_NAME}>"
-            "$<TARGET_FILE:edge_controller_bounded_address_resolver_integration_test>"
-    )
-    set_tests_properties(edge_controller_bounded_address_resolver_integration PROPERTIES TIMEOUT 30)
 endif()
 
-set(edge_controller_targets edge_controller_core ${PROJECT_NAME})
-if(EDGE_CONTROLLER_BUILD_TESTS)
-    list(APPEND edge_controller_targets
-        edge_controller_modbus_integration_test
-        edge_controller_config_import_atomicity_test
-        edge_controller_event_store_query_test
-        edge_controller_data_store_realtime_snapshot_test
-        edge_controller_alarm_evaluator_batch_test
-        edge_controller_alarm_rule_validation_test
-        edge_controller_device_value_status_test
-        edge_controller_history_store_test
-        edge_controller_bounded_address_resolver_integration_test
-    )
-endif()
 foreach(target ${edge_controller_targets})
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)

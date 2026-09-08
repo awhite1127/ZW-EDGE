@@ -272,8 +272,8 @@ SystemOverviewSnapshot BackendService::get_system_overview_snapshot() const
         std::shared_lock<std::shared_mutex> lock(service_mutex_);
         snapshot.generated_at_ms = time_utils::system_now_ms();
         snapshot.system_status = data_store_.get_system_status();
-        snapshot.polling = polling_service_ != nullptr
-                               ? polling_service_->get_last_cycle_summary()
+        snapshot.polling = polling_runtime_.get() != nullptr
+                               ? polling_runtime_.get()->get_last_cycle_summary()
                                : data_store_.get_polling_summary();
         snapshot.current_error = backend_internal::build_current_error_summary(snapshot.system_status);
         snapshot.mqtt_runtime = mqtt_publisher_service_.runtime_status();

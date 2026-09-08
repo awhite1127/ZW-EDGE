@@ -56,7 +56,7 @@ struct EventHistoryResult {
 
 class EventStore {
 public:
-    // 销毁 EventStore 实例并释放相关资源。
+
     ~EventStore();
 
     // 初始化。

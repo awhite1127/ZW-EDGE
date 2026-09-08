@@ -5,6 +5,8 @@
 
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -33,7 +35,21 @@ struct ChannelOpenSummary {
 
 class ChannelManager {
 public:
-    using CommunicationLease = std::unique_lock<std::mutex>;
+    ChannelManager() = default;
+    ChannelManager(const ChannelManager&) = delete;
+    ChannelManager& operator=(const ChannelManager&) = delete;
+    ChannelManager(ChannelManager&&) noexcept = default;
+    ChannelManager& operator=(ChannelManager&&) noexcept = default;
+    struct CommunicationLease {
+        std::shared_ptr<std::mutex> resource;
+        std::unique_lock<std::mutex> lock;
+        CommunicationLease() = default;
+        explicit CommunicationLease(std::shared_ptr<std::mutex> value)
+            : resource(std::move(value)), lock(*resource) {}
+    };
+    // 仅替换目标通道；调用方串行化配置变更，收发者继续使用通信租约。
+    StatusCode apply_channels(const std::vector<ChannelConfig>& configs,
+        const std::function<StatusCode()>& persist, std::string* error = nullptr);
     // 根据通道配置创建串口或 TCP 通道实例。
     StatusCode initialize(const std::vector<ChannelConfig>& channels, std::string* error_message = nullptr);
     // 打开所有启用通道，并返回打开结果摘要。
@@ -51,6 +67,7 @@ public:
     // 独占指定通道实际使用的通讯资源；同一物理串口路径共享锁，TCP 按通道隔离。
     CommunicationLease acquire_communication_lease(const ChannelId& channel_id);
 
+    std::uint64_t generation(const ChannelId& id) const;
     // 按通道 ID 获取通道收发接口。
     IChannel* get_channel(const ChannelId& channel_id);
     // 按通道 ID 获取最近运行状态。
@@ -64,7 +81,10 @@ private:
         const std::vector<ChannelId>* channel_ids,
         ChannelOpenSummary* summary);
 
-    std::unordered_map<ChannelId, std::unique_ptr<IChannel>> channels_{};
+    std::shared_ptr<std::shared_mutex> index_mutex_{std::make_shared<std::shared_mutex>()};
+    std::unordered_map<std::string, std::shared_ptr<std::mutex>> resource_mutexes_;
+    std::unordered_map<ChannelId, std::uint64_t> generations_;
+    std::unordered_map<ChannelId, std::shared_ptr<IChannel>> channels_{};
     std::unordered_map<ChannelId, std::shared_ptr<std::mutex>> communication_mutexes_{};
 };
 

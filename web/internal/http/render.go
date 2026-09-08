@@ -179,20 +179,8 @@ func (s *Server) renderPage(w http.ResponseWriter, page string, data interface{}
 
 func writeResult(w http.ResponseWriter, data interface{}, err error) {
 	if err != nil {
-		status, code, message := backendHTTPError(err)
-		var callError *ipc.CallError
-		if errors.As(err, &callError) && callError != nil {
-			domain := callError.Domain
-			if domain == "" {
-				domain = "backend"
-			}
-			writeAPIError(w, status, model.APIError{
-				Code: code, Domain: domain, Message: userVisibleErrorMessage(callError.Message),
-				Params: callError.Params, Retryable: callError.Retryable,
-			})
-			return
-		}
-		writeError(w, status, code, message)
+		status, apiError := backendHTTPError(err)
+		writeAPIError(w, status, apiError)
 		return
 	}
 
@@ -200,14 +188,19 @@ func writeResult(w http.ResponseWriter, data interface{}, err error) {
 }
 
 // backendHTTPError 把 IPC 业务状态统一映射为 HTTP 语义，所有 JSON API 共用同一规则。
-func backendHTTPError(err error) (int, string, string) {
-	status, code, message := http.StatusBadGateway, "backend_error", err.Error()
+func backendHTTPError(err error) (int, model.APIError) {
+	status := http.StatusBadGateway
+	result := model.APIError{Code: "backend_error", Domain: "backend", Message: userVisibleErrorMessage(err.Error()), Retryable: true}
 	var callError *ipc.CallError
-	if !errors.As(err, &callError) {
-		return status, code, message
+	if !errors.As(err, &callError) || callError == nil {
+		return status, result
 	}
-
-	code, message = callError.Code, callError.Message
+	result.Code, result.Params, result.Retryable = callError.Code, callError.Params, callError.Retryable
+	if callError.Domain != "" {
+		result.Domain = callError.Domain
+	}
+	// IPC 已给出稳定代码和领域；展示只清理文本，不再反推错误类别。
+	result.Message = userVisibleErrorMessage(callError.Message)
 	switch callError.Code {
 	case "invalid_request", "invalid_argument":
 		status = http.StatusBadRequest
@@ -218,7 +211,7 @@ func backendHTTPError(err error) (int, string, string) {
 	case "invalid_state", "io_error", "timeout", "server_busy":
 		status = http.StatusServiceUnavailable
 	}
-	return status, code, message
+	return status, result
 }
 
 func writeSuccess(w http.ResponseWriter, data interface{}) {

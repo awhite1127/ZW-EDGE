@@ -1,5 +1,7 @@
 // libmosquitto 适配器：封装 TLS 配置、连接回调和发布统计，使上层不依赖具体客户端 API。
 #include "communication/mqtt/mqtt_client.h"
+#include <unordered_map>
+#include <unordered_set>
 
 #include <cstddef>
 #include <cstdint>
@@ -68,7 +70,6 @@ public:
         }
     }
 
-    // 构造 MosquittoLibraryLifecycle 实例。
     MosquittoLibraryLifecycle(const MosquittoLibraryLifecycle&) = delete;
     // 移动赋值对象并转移其资源所有权。
     MosquittoLibraryLifecycle& operator=(const MosquittoLibraryLifecycle&) = delete;
@@ -82,7 +83,7 @@ private:
 
 class MosquittoMqttClient final : public MqttClient {
 public:
-    // 销毁 MosquittoMqttClient 实例并释放相关资源。
+
     ~MosquittoMqttClient() override
     {
         stop();
@@ -136,9 +137,13 @@ public:
                 *error_message = runtime_status().last_error_message;
             }
             lifecycle_.reset();
+        std::lock_guard<std::mutex> lock(receipt_mutex_);
+        pending_receipts_.clear();
+        acknowledged_.clear();
             return StatusCode::kInternalError;
         }
 
+        mosquitto_publish_callback_set(mosq_, &MosquittoMqttClient::on_publish);
         mosquitto_connect_callback_set(mosq_, &MosquittoMqttClient::on_connect);
         mosquitto_disconnect_callback_set(mosq_, &MosquittoMqttClient::on_disconnect);
         mosquitto_reconnect_delay_set(mosq_, 1, 30, true);
@@ -308,14 +313,19 @@ public:
             return StatusCode::kInvalidState;
         }
 
+        std::unique_lock<std::mutex> receipt_lock(receipt_mutex_);
+        int message_id = 0;
         const auto result = mosquitto_publish(
             mosq_,
-            nullptr,
+            &message_id,
             topic.c_str(),
             static_cast<int>(payload.size()),
             payload.data(),
             qos,
             retain);
+        if (result == MOSQ_ERR_SUCCESS && (publish_sequence & (1ULL << 63)) != 0 && qos > 0)
+            pending_receipts_[message_id] = publish_sequence;
+        receipt_lock.unlock();
         if (result != MOSQ_ERR_SUCCESS) {
             set_publish_failure(
                 topic,
@@ -357,7 +367,27 @@ public:
         return status_;
     }
 
+    bool consume_publish_ack(std::uint64_t sequence) override {
+        std::lock_guard<std::mutex> lock(receipt_mutex_);
+        return acknowledged_.erase(sequence) != 0;
+    }
+    void forget_publish(std::uint64_t sequence) override {
+        std::lock_guard<std::mutex> lock(receipt_mutex_);
+        acknowledged_.erase(sequence);
+        for (auto it = pending_receipts_.begin(); it != pending_receipts_.end();) {
+            if (it->second == sequence) it = pending_receipts_.erase(it); else ++it;
+        }
+    }
 private:
+    static void on_publish(mosquitto*, void* userdata, int message_id) {
+        auto* self = static_cast<MosquittoMqttClient*>(userdata);
+        std::lock_guard<std::mutex> lock(self->receipt_mutex_);
+        const auto receipt = self->pending_receipts_.find(message_id);
+        if (receipt != self->pending_receipts_.end()) {
+            self->acknowledged_.insert(receipt->second);
+            self->pending_receipts_.erase(receipt);
+        }
+    }
     // 处理 MQTT 连接结果回调并更新状态。
     static void on_connect(mosquitto*, void* userdata, int rc)
     {
@@ -503,6 +533,9 @@ private:
         lifecycle_.reset();
     }
 
+    std::mutex receipt_mutex_;
+    std::unordered_map<int, std::uint64_t> pending_receipts_;
+    std::unordered_set<std::uint64_t> acknowledged_;
     mutable std::mutex status_mutex_;
     std::mutex mqtt_mutex_;
     MqttSettings settings_{};

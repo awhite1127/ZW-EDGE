@@ -20,17 +20,8 @@ namespace edge_controller {
 
 namespace {
 
-constexpr std::size_t kPendingEventRetryCapacity = 256;
-constexpr std::size_t kPendingEventRetryBatchSize = 16;
 constexpr auto kPendingEventRetryInterval = std::chrono::seconds(5);
 
-// 停止轮询服务外部锁。
-void stop_polling_service_outside_lock(std::unique_ptr<PollingService>& polling_service)
-{
-    if (polling_service != nullptr) {
-        polling_service->stop();
-    }
-}
 
 // 返回配置变更被阻止时的稳定错误文本。
 const char* config_mutation_blocked_message()
@@ -40,14 +31,13 @@ const char* config_mutation_blocked_message()
 
 }  // namespace
 
-// 销毁 BackendService 实例并释放相关资源。
 BackendService::~BackendService()
 {
     modbus_tcp_server_.stop();
     stop_data_maintenance();
     stop_time_jump_monitor();
-    if (polling_service_ != nullptr) {
-        polling_service_->stop();
+    if (polling_runtime_.get() != nullptr) {
+        polling_runtime_.get()->stop();
     }
     time_runtime_.shutdown();
     mqtt_publisher_service_.stop();
@@ -116,11 +106,6 @@ StatusCode BackendService::initialize(const std::string& data_directory)
         Logger::error("事件 SQLite 存储初始化失败：" + event_store_error);
         return event_store_status;
     }
-    {
-        std::lock_guard<std::mutex> pending_lock(pending_event_mutex_);
-        pending_event_retries_.clear();
-        next_pending_event_retry_id_ = 1;
-    }
     DataMaintenanceSummary maintenance_summary;
     std::string maintenance_error;
     const auto maintenance_status = cleanup_expired_data(&maintenance_summary, &maintenance_error);
@@ -168,8 +153,9 @@ StatusCode BackendService::initialize(const std::string& data_directory)
     const auto alarm_status = alarm_evaluator_.initialize(
         &alarm_store_, build_alarm_point_contexts_locked(),
         [this](ServiceEvent event) {
-            append_event(event.level, event.source, event.target_id, event.summary, event.detail, event.timestamp_ms, event.diagnosis);
-        }, &alarm_error);
+            (void)event;
+            data_maintenance_wakeup_.notify_all();
+        }, &alarm_error, [this] { return event_persistence_suppressed_.load(); });
     if (!is_ok(alarm_status)) {
         Logger::error("告警判定服务初始化失败：" + alarm_error);
         // load_config_internal 已经发布运行态并可能启动 MQTT/打开 TCP 通道；初始化失败必须立即回收。
@@ -270,14 +256,14 @@ void BackendService::shutdown()
         last_time_adjustment_after_ms_ = 0;
         last_time_adjustment_delta_ms_ = 0;
     }
-    std::unique_ptr<PollingService> polling_to_stop;
+    std::shared_ptr<PollingService> polling_to_stop;
     {
         std::unique_lock<std::shared_mutex> lock(service_mutex_);
         polling_to_stop = detach_polling_service_locked("stopping", "轮询停止中");
     }
     // 先解除轮询回调，再停止北向线程；两种 join 都不持有 service_mutex_。
     modbus_tcp_server_.stop();
-    stop_polling_service_outside_lock(polling_to_stop);
+    PollingRuntime::stop(polling_to_stop);
     time_runtime_.shutdown();
     {
         std::unique_lock<std::shared_mutex> lock(service_mutex_);
@@ -368,7 +354,7 @@ void BackendService::data_maintenance_loop()
 StatusCode BackendService::load_config_internal(std::vector<std::string>* errors)
 {
     PreparedRuntimeConfig prepared;
-    const auto prepare_status = prepare_runtime_config(&prepared, errors);
+    const auto prepare_status = runtime_config_compiler_.prepare(&prepared, errors);
     if (!is_ok(prepare_status)) {
         return prepare_status;
     }
@@ -389,10 +375,7 @@ void BackendService::set_last_error(
     }
 
     const auto readable = build_readable_runtime_error(message);
-    auto error_code = classify_runtime_error(message);
-    if (error_code == DiagnosisErrorCode::kNone) {
-        error_code = DiagnosisErrorCode::kUnknownError;
-    }
+    const auto error_code = DiagnosisErrorCode::kUnknownError;
     const auto level = source.find("channel") != std::string::npos
                            ? DiagnosisLevel::kChannel
                            : (source == "polling" ? DiagnosisLevel::kMaster : DiagnosisLevel::kSystem);
@@ -406,6 +389,7 @@ void BackendService::set_last_error(
         timestamp_ms,
         0);
     DiagnosisStatus effective_diagnosis = diagnosis;
+    effective_diagnosis.message = message;
     if (!target_id.empty()) {
         const auto channel_status = data_store_.get_channel_status(target_id);
         if (channel_status.has_value() && channel_status->diagnosis.error_code != "NONE") {
@@ -488,7 +472,9 @@ void BackendService::append_event(
         }
         Logger::error("历史事件持久化失败：" + event_error);
         if (event.source == "data_alarm" || event.source == "alarm_ack") {
-            enqueue_pending_event(std::move(event));
+            std::vector<ServiceEvent> events{std::move(event)};
+            if (!is_ok(alarm_store_.apply_runtime_state_batch({}, {}, &event_error, &events)))
+                Logger::error("保存告警待发送记录失败：" + event_error);
         }
         return;
     }
@@ -499,69 +485,34 @@ void BackendService::append_event(
     publish_persisted_event(stored_event);
 }
 
-// 一次性告警事件写入失败后保留完整事件；队列满时丢弃最旧项，优先保留现场最新状态。
-void BackendService::enqueue_pending_event(ServiceEvent event)
-{
-    bool dropped_oldest = false;
-    std::size_t queue_size = 0;
-    {
-        std::lock_guard<std::mutex> lock(pending_event_mutex_);
-        if (pending_event_retries_.size() >= kPendingEventRetryCapacity) {
-            pending_event_retries_.pop_front();
-            dropped_oldest = true;
-        }
-        pending_event_retries_.push_back(
-            PendingEventRetry{next_pending_event_retry_id_++, std::move(event)});
-        queue_size = pending_event_retries_.size();
-    }
-    if (dropped_oldest) {
-        Logger::error("pending event retry queue 已满，已丢弃最旧事件，容量=" +
-                      std::to_string(kPendingEventRetryCapacity));
-    }
-    Logger::warn("一次性告警事件已加入持久化重试队列，当前数量=" + std::to_string(queue_size));
-    data_maintenance_wakeup_.notify_all();
-}
-
-// 每个维护周期按 FIFO 重试有限批次；遇到数据库仍不可用即停止本轮，避免高频刷库。
+// 周期搬运持久化告警事件，不重新执行状态机。
 void BackendService::retry_pending_events()
 {
-    for (std::size_t index = 0; index < kPendingEventRetryBatchSize; ++index) {
-        PendingEventRetry pending;
-        {
-            std::lock_guard<std::mutex> lock(pending_event_mutex_);
-            if (pending_event_retries_.empty()) {
-                return;
-            }
-            pending = pending_event_retries_.front();
-        }
-
-        ServiceEvent stored_event;
-        std::string event_error;
-        const auto status = event_store_.append(pending.event, &event_error, &stored_event);
-        if (!is_ok(status) && stored_event.event_id.empty()) {
-            return;
-        }
-        if (!is_ok(status)) {
-            Logger::warn("pending event 已持久化，但后置维护失败：" + event_error);
-        }
-
-        {
-            std::lock_guard<std::mutex> lock(pending_event_mutex_);
-            const auto iterator = std::find_if(
-                pending_event_retries_.begin(), pending_event_retries_.end(),
-                [&pending](const PendingEventRetry& entry) {
-                    return entry.retry_id == pending.retry_id;
-                });
-            if (iterator != pending_event_retries_.end()) {
-                pending_event_retries_.erase(iterator);
-            }
-        }
-        if (!stored_event.event_id.empty()) {
-            publish_persisted_event(stored_event);
-        }
-        Logger::info("pending event 持久化重试成功，source=" + pending.event.source +
-                     "，target=" + pending.event.target_id);
+    std::lock_guard<std::mutex> lock(alarm_delivery_mutex_);
+    if (event_persistence_suppressed_.load()) return;
+    std::vector<ServiceEvent> durable_events;
+    std::string durable_error;
+    if (is_ok(alarm_store_.pending_events(&durable_events, &durable_error))) {
+        for (const auto& event : durable_events) deliver_alarm_event(event);
+    } else {
+        Logger::warn("读取告警待发送记录失败：" + durable_error);
     }
+
+}
+
+
+void BackendService::deliver_alarm_event(const ServiceEvent& event)
+{
+    ServiceEvent stored;
+    std::string error;
+    const auto status = event_store_.append(event, &error, &stored);
+    if (!is_ok(status) && stored.event_id.empty()) {
+        Logger::error("告警事件搬运失败，保留持久化待发送记录：" + error);
+        return;
+    }
+    if (!mqtt_publisher_service_.deliver_durable_event(stored)) return;
+    if (!is_ok(alarm_store_.acknowledge_event(event.event_id, &error)))
+        Logger::warn("告警事件确认失败，下轮幂等重试：" + error);
 }
 
 // EventStore 成功是 MQTT 一次性发布的唯一入口，失败重试期间不会重复发布。

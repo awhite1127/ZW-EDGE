@@ -16,18 +16,6 @@
 
 namespace edge_controller {
 
-namespace {
-
-// 停止轮询服务外部锁。
-void stop_polling_service_outside_lock(std::unique_ptr<PollingService>& polling_service)
-{
-    if (polling_service != nullptr) {
-        polling_service->stop();
-    }
-}
-
-}  // namespace
-
 // 启动后端采集轮询。
 StatusCode BackendService::start_polling()
 {
@@ -42,22 +30,18 @@ StatusCode BackendService::start_polling()
 // 停止后端采集轮询。
 void BackendService::stop_polling()
 {
-    std::unique_ptr<PollingService> polling_to_stop;
-    {
-        std::unique_lock<std::shared_mutex> lock(service_mutex_);
-        if (config_apply_in_progress_.load()) {
-            return;
-        }
-        polling_to_stop = detach_polling_service_locked("stopping", "轮询停止中");
-    }
-    stop_polling_service_outside_lock(polling_to_stop);
-    {
-        std::unique_lock<std::shared_mutex> lock(service_mutex_);
-        merge_stopped_polling_service_locked(
-            polling_to_stop.get(),
-            initialized_ ? "stopped" : "not_started",
-            initialized_ ? "轮询已停止" : "后端服务已停止");
-    }
+    std::unique_lock<std::shared_mutex> lock(service_mutex_);
+    if (config_apply_in_progress_.load()) return;
+    // 覆盖锁外 join 区间，禁止旧 worker 尚未退出时启动新轮询或切换配置。
+    backend_internal::ScopedConfigApplyFlag transition(config_apply_in_progress_);
+    auto polling_to_stop = detach_polling_service_locked("stopping", "轮询停止中");
+    lock.unlock();
+    PollingRuntime::stop(polling_to_stop);
+    lock.lock();
+    merge_stopped_polling_service_locked(
+        polling_to_stop.get(),
+        initialized_ ? "stopped" : "not_started",
+        initialized_ ? "轮询已停止" : "后端服务已停止");
 }
 
 // 判断采集轮询是否正在运行。
@@ -70,7 +54,7 @@ bool BackendService::is_polling_running() const
 // 在持锁状态下判断采集轮询是否正在运行。
 bool BackendService::is_polling_running_locked() const
 {
-    return polling_service_ != nullptr && polling_service_->is_running();
+    return polling_runtime_.get() != nullptr && polling_runtime_.get()->is_running();
 }
 
 // 判断当前配置中是否存在启用的采集目标。
@@ -144,11 +128,10 @@ StatusCode BackendService::start_polling_locked(std::string* error_message)
         return StatusCode::kInvalidState;
     }
 
-    polling_service_ = std::make_unique<PollingService>(
-        &system_config_,
-        &topology_manager_,
-        &channel_manager_,
-        &data_store_,
+    polling_runtime_.install(std::make_shared<PollingService>(
+        system_config_,
+        channel_manager_,
+        data_store_,
         &history_store_,
         &communication_trace_store_,
         &alarm_evaluator_,
@@ -158,21 +141,19 @@ StatusCode BackendService::start_polling_locked(std::string* error_message)
                const std::string& message,
                TimestampMs timestamp_ms) {
             set_last_error(source, target_id, message, timestamp_ms);
-        });
+        }));
     const std::weak_ptr<ModbusExportService> weak_export_service = modbus_export_service_;
-    polling_service_->set_device_status_update_callback(
+    polling_runtime_.get()->set_device_status_update_callback(
         [weak_export_service](const std::vector<DeviceStatus>& statuses) {
             if (const auto export_service = weak_export_service.lock()) {
                 export_service->update_device_statuses(statuses);
             }
         });
-    history_sampling_service_ = polling_service_.get();
 
-    const auto status = polling_service_->start();
+    const auto status = polling_runtime_.get()->start();
     if (!is_ok(status)) {
-        const auto polling_error = polling_service_->get_last_error_summary();
-        history_sampling_service_ = nullptr;
-        polling_service_.reset();
+        const auto polling_error = polling_runtime_.get()->get_last_error_summary();
+        polling_runtime_.reset();
         if (error_message != nullptr) {
             *error_message = polling_error.has_error && !polling_error.message.empty()
                                  ? polling_error.message
@@ -191,13 +172,13 @@ StatusCode BackendService::start_polling_locked(std::string* error_message)
 }
 
 // 在持锁状态下摘出当前轮询服务，供锁外停止。
-std::unique_ptr<PollingService> BackendService::detach_polling_service_locked(
+std::shared_ptr<PollingService> BackendService::detach_polling_service_locked(
     const std::string& polling_state,
     const std::string& status_message)
 {
-    auto polling_service = std::move(polling_service_);
+    auto polling_service = polling_runtime_.detach();
     if (polling_service != nullptr) {
-        polling_service->set_device_status_update_callback({});
+        // 保留弱引用导出回调，确保 stop 的最后一次 stale 通知到达北向 bank。
         auto runtime_status = data_store_.get_system_status();
         runtime_status.polling_running = true;
         runtime_status.polling_state = polling_state;
@@ -211,7 +192,7 @@ std::unique_ptr<PollingService> BackendService::detach_polling_service_locked(
 // 配置应用前暂停轮询，避免采集线程和配置重载同时访问通道。
 void BackendService::stop_polling_for_config_apply(
     std::unique_lock<std::shared_mutex>& lock,
-    std::unique_ptr<PollingService>* polling_to_stop)
+    std::shared_ptr<PollingService>* polling_to_stop)
 {
     if (polling_to_stop == nullptr) {
         return;
@@ -219,7 +200,7 @@ void BackendService::stop_polling_for_config_apply(
     // 停采可能等待串口/网络 IO 结束，必须在锁外执行，避免阻塞状态查询和错误上报路径。
     *polling_to_stop = detach_polling_service_locked("stopping", "轮询停止中，准备应用配置");
     lock.unlock();
-    stop_polling_service_outside_lock(*polling_to_stop);
+    PollingRuntime::stop(*polling_to_stop);
     lock.lock();
     merge_stopped_polling_service_locked(polling_to_stop->get(), "config_applying", "配置应用中");
 }
@@ -230,9 +211,7 @@ void BackendService::merge_stopped_polling_service_locked(
     const std::string& polling_state,
     const std::string& status_message)
 {
-    if (history_sampling_service_ == stopped_service) {
-        history_sampling_service_ = nullptr;
-    }
+    polling_runtime_.finish_stop(stopped_service);
     if (stopped_service != nullptr) {
         const auto polling_error = stopped_service->get_last_error_summary();
         if (polling_error.has_error) {
