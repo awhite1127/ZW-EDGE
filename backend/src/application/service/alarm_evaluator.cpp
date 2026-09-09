@@ -423,7 +423,8 @@ StatusCode AlarmEvaluator::delete_rule(
 // 使用同一采集批次的设备状态原子评估全部相关告警规则。
 StatusCode AlarmEvaluator::evaluate_batch(
     const std::vector<DeviceStatus>& statuses,
-    std::string* error_message)
+    std::string* error_message,
+    bool sampling_gap)
 {
     std::unique_lock<std::mutex> mutation_lock(mutation_mutex_);
     EvaluationPlan plan;
@@ -437,8 +438,43 @@ StatusCode AlarmEvaluator::evaluate_batch(
         }
         store = store_;
         const auto checkpoint_time = std::chrono::steady_clock::now();
+        // 缺口与本批评估共用事务；提交失败时由调用者保留缺口标记重试。
+        // 保留活动告警及确认信息，仅撤销未完成的连续触发/恢复计数。
+        if (sampling_gap) {
+            for (const auto& entry : states_) {
+                if (entry.second.state == "pending") {
+                    plan_state_delete_locked(&plan, entry.first);
+                } else if (entry.second.state == "active") {
+                    auto state = entry.second;
+                    state.consecutive_trigger_count = 0;
+                    state.consecutive_recovery_count = 0;
+                    plan_state_upsert_locked(&plan, state, true, checkpoint_time);
+                }
+            }
+        }
         // 多区块设备可能只成功一部分区块；在线设备按点位自身质量判定。
         for (const auto& status : statuses) {
+            // 连续次数按采集轮次解释：通信失败、坏值或缺少点位都中断连续性。
+            // 仅重置该设备受影响点位；保留活动告警及确认状态，不把断线当恢复。
+            for (auto iterator = states_.lower_bound(Key{status.device_id, ""});
+                 iterator != states_.end() && iterator->first.first == status.device_id; ++iterator) {
+                const auto& entry = *iterator;
+                const auto point = std::find_if(status.points.begin(), status.points.end(),
+                    [&](const PointValue& value) { return value.key == entry.first.second; });
+                if (status.online && point != status.points.end() && point->valid &&
+                    point->quality == DataQuality::kGood && std::isfinite(point->value)) continue;
+                const auto* previous = planned_state_locked(plan, entry.first);
+                if (previous == nullptr || status.updated_at_ms < previous->last_evaluated_at_ms) continue;
+                if (previous->state == "pending") {
+                    plan_state_delete_locked(&plan, entry.first);
+                } else if (previous->state == "active" && previous->consecutive_recovery_count != 0) {
+                    auto reset = *previous;
+                    reset.consecutive_recovery_count = 0;
+                    reset.last_evaluated_at_ms = status.updated_at_ms;
+                    reset.updated_at_ms = std::max(reset.updated_at_ms, status.updated_at_ms);
+                    plan_state_upsert_locked(&plan, reset, true, checkpoint_time);
+                }
+            }
             if (!status.online) continue;
             for (const auto& point : status.points) {
                 if (!point.valid || point.quality != DataQuality::kGood || !std::isfinite(point.value)) continue;
@@ -518,7 +554,6 @@ StatusCode AlarmEvaluator::evaluate_batch(
 // 保留单设备兼容入口，共用同一批处理提交语义。
 void AlarmEvaluator::evaluate(const DeviceStatus& status)
 {
-    if (!status.online) return;
     std::string error;
     const auto result = evaluate_batch(std::vector<DeviceStatus>{status}, &error);
     if (!is_ok(result)) {
@@ -591,7 +626,7 @@ void AlarmEvaluator::plan_state_upsert_locked(
     if (plan == nullptr) return;
     const Key key{state.device_id, state.point_key};
     plan->state_updates[key] = state;
-    if (persist) {
+    if (persist || plan->persistence_updates.find(key) != plan->persistence_updates.end()) {
         plan->persistence_updates[key] = state;
         plan->checkpoint_updates[key] = checkpoint_time;
     }

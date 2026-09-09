@@ -287,9 +287,18 @@ bool PollingService::publish_device_statuses(const std::vector<DeviceStatus>& st
     const ChannelId& channel, std::uint64_t generation)
 {
     std::lock_guard<std::mutex> lock(publication_mutex_);
-    if (!channel.empty() && channel_manager_.generation(channel) != generation) return false;
+    if (channel_manager_.generation(channel) != generation) return false;
     data_store_.update_device_statuses(statuses);
     notify_device_status_updated(statuses);
+    return true;
+}
+
+bool PollingService::publish_master_status(const MasterNodeStatus& status,
+    const ChannelId& channel, std::uint64_t generation)
+{
+    std::lock_guard<std::mutex> lock(publication_mutex_);
+    if (channel_manager_.generation(channel) != generation) return false;
+    data_store_.update_master_status(status);
     return true;
 }
 

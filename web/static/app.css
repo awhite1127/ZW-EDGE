@@ -2953,6 +2953,12 @@ textarea:focus-visible,
     margin-bottom: 0;
 }
 
+.realtime-refresh-help {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
 .realtime-table-panel .module-tools .toolbar-chip {
     min-height: 28px;
     padding: 2px 8px;

@@ -82,6 +82,7 @@ private:
 }  // namespace
 
 class MosquittoMqttClient final : public MqttClient {
+    friend struct MosquittoMqttClientTestAccess;
 public:
 
     ~MosquittoMqttClient() override
@@ -137,9 +138,6 @@ public:
                 *error_message = runtime_status().last_error_message;
             }
             lifecycle_.reset();
-        std::lock_guard<std::mutex> lock(receipt_mutex_);
-        pending_receipts_.clear();
-        acknowledged_.clear();
             return StatusCode::kInternalError;
         }
 
@@ -226,8 +224,8 @@ public:
         if (mosq_ != nullptr) {
             mosquitto_disconnect(mosq_);
             mosquitto_loop_stop(mosq_, true);
-            cleanup_mosquitto_locked();
         }
+        cleanup_mosquitto_locked();
 
         std::lock_guard<std::mutex> status_lock(status_mutex_);
         status_.connected = false;
@@ -531,6 +529,10 @@ private:
             mosq_ = nullptr;
         }
         lifecycle_.reset();
+        // 网络循环已停止；旧客户端的消息编号和确认记录不得跨重建保留。
+        std::lock_guard<std::mutex> receipt_lock(receipt_mutex_);
+        pending_receipts_.clear();
+        acknowledged_.clear();
     }
 
     std::mutex receipt_mutex_;

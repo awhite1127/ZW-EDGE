@@ -112,9 +112,21 @@
                 <select id="realtime-device-selector" aria-label="选择当前设备"></select>
             </label>
             <span class="toolbar-chip" id="realtime-table-status">{{$dashboard.TableStatusText}}</span>
+            <label class="current-device-selector" for="realtime-refresh-interval">
+                <span>页面刷新</span>
+                <select id="realtime-refresh-interval" aria-describedby="realtime-refresh-help">
+                    <option value="1000">每 1 秒</option>
+                    <option value="3000">每 3 秒</option>
+                    <option value="5000">每 5 秒</option>
+                    <option value="10000" selected>每 10 秒</option>
+                    <option value="0">仅手动</option>
+                </select>
+            </label>
+            <button type="button" class="btn btn-small btn-secondary" id="realtime-refresh-button">立即刷新</button>
             <span class="toolbar-chip">最近刷新：<span id="realtime-refresh-time">{{if .RefreshedAt}}{{.RefreshedAt}}{{else}}未刷新{{end}}</span></span>
         </div>
     </div>
+    <p class="realtime-refresh-help" id="realtime-refresh-help">页面刷新不改变设备采集周期；采集周期在主站配置中设置。</p>
 
     <div id="realtime-error" class="flash flash-error hidden">
     </div>

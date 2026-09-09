@@ -35,7 +35,6 @@ void PollingService::channel_worker_loop(
 
     while (!stop_requested_.load()) {
         const auto cycle_started_at_ms = time_utils::system_now_ms();
-        const auto cycle_started_at_steady_ms = time_utils::steady_now_ms();
         std::size_t processed_master_count = 0;
         std::size_t success_master_count = 0;
         std::size_t failed_master_count = 0;
@@ -51,15 +50,14 @@ void PollingService::channel_worker_loop(
                     break;
                 }
                 if (target.next_poll_steady_ms != 0 &&
-                    cycle_started_at_steady_ms < target.next_poll_steady_ms) {
+                    time_utils::steady_now_ms() < target.next_poll_steady_ms) {
                     continue;
                 }
-                refresh_master_runtime_if_needed(&target);
-
-                ++processed_master_count;
+                target.channel_generation = channel_manager_.generation(channel_id);
                 const auto started = time_utils::steady_now_ms();
                 MasterCollectionResult result;
                 try {
+                    refresh_master_runtime_if_needed(&target);
                     result = execute_master_collection(channel_id, collector, target);
                 } catch (const std::exception& error) {
                     result = mark_master_collection_failed_without_io(target,
@@ -69,6 +67,8 @@ void PollingService::channel_worker_loop(
                         "主站采集发生未知异常", DiagnosisErrorCode::kUnknownError);
                 }
                 target.next_poll_steady_ms = started + target.master.poll_interval_ms;
+                if (result.discarded) continue;
+                ++processed_master_count;
                 account_master_collection_result(
                     target.master,
                     result,
@@ -89,7 +89,6 @@ void PollingService::channel_worker_loop(
         }
 
         const auto cycle_finished_at_ms = time_utils::system_now_ms();
-        const auto cycle_finished_at_steady_ms = time_utils::steady_now_ms();
         has_error = !first_error_message.empty() || failed_master_count > 0 || failed_device_count > 0;
         {
             std::lock_guard<std::mutex> lock(summary_mutex_);
@@ -112,12 +111,14 @@ void PollingService::channel_worker_loop(
 
         publish_aggregate_status(true, has_error ? "fault" : "running", has_error ? "采集异常" : "轮询运行中");
 
-        // 固定全局周期：本通道耗时小于周期时补等待，大于周期时直接进入下一轮。
-        const auto elapsed_ms =
-            cycle_finished_at_steady_ms - cycle_started_at_steady_ms;
-        const auto wait_ms = elapsed_ms >= poll_interval_ms_
-                                 ? 0U
-                                 : (poll_interval_ms_ - static_cast<std::uint32_t>(elapsed_ms));
+        // 按最近到期主站唤醒；耗时超过周期时直接调度，不补跑错过的轮次。
+        const auto wait_started_at_ms = time_utils::steady_now_ms();
+        TimestampMs wait_ms = poll_interval_ms_;
+        for (const auto& target : targets) {
+            const auto remaining = target.next_poll_steady_ms > wait_started_at_ms
+                ? target.next_poll_steady_ms - wait_started_at_ms : 0;
+            wait_ms = std::min(wait_ms, remaining);
+        }
 
         std::unique_lock<std::mutex> lock(wait_mutex_);
         wait_cv_.wait_for(

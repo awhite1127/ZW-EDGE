@@ -384,12 +384,12 @@
                 <label>
                     <span>连续触发次数</span>
                     <input type="number" min="1" max="100" step="1" name="trigger_count" data-alarm-trigger-count value="1">
-                    <small class="field-hint">连续达到触发次数后生成告警事件。</small>
+                    <small class="field-hint">连续有效采集达到次数后触发；通信失败或数据无效会重新计数。</small>
                 </label>
                 <label>
                     <span>连续恢复次数</span>
                     <input type="number" min="1" max="100" step="1" name="recovery_count" data-alarm-recovery-count value="1">
-                    <small class="field-hint">连续恢复到正常范围后生成恢复事件。</small>
+                    <small class="field-hint">连续有效采集恢复正常后解除；通信失败或数据无效会重新计数，不会解除已有告警。</small>
                 </label>
                 </div>
                 <div class="alarm-form-actions">

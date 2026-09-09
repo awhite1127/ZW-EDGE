@@ -41,6 +41,16 @@
         const topBackendState = document.getElementById("backend-status-pill");
         const connectionAlert = document.getElementById("realtime-connection-alert");
         const reconnectButtons = document.querySelectorAll("[data-realtime-reconnect]");
+        const refreshButton = document.getElementById("realtime-refresh-button");
+        const refreshIntervalSelector = document.getElementById("realtime-refresh-interval");
+        const refreshPreferenceKey = "edge.realtime.refresh-interval.v1";
+        const allowedRefreshIntervals = [0, 1000, 3000, 5000, 10000];
+        let refreshIntervalMS = 10000;
+        try {
+            const saved = window.localStorage.getItem(refreshPreferenceKey);
+            if (saved !== null && allowedRefreshIntervals.includes(Number(saved))) refreshIntervalMS = Number(saved);
+        } catch (_) { /* 浏览器禁止存储时使用默认周期。 */ }
+        if (refreshIntervalSelector) refreshIntervalSelector.value = String(refreshIntervalMS);
         const channelList = document.getElementById("realtime-channel-list");
         const masterList = document.getElementById("realtime-master-list");
         const channelSummary = document.getElementById("realtime-channel-summary");
@@ -101,6 +111,10 @@
                 return;
             }
             realtimeRefreshInFlight = true;
+            if (refreshButton) {
+                refreshButton.disabled = true;
+                refreshButton.textContent = "刷新中…";
+            }
             try {
                 const response = await scope.fetch(refreshUrl, {
                     method: "GET",
@@ -159,6 +173,10 @@
                 markRealtimeDataStale(message);
             } finally {
                 realtimeRefreshInFlight = false;
+                if (refreshButton) {
+                    refreshButton.disabled = false;
+                    refreshButton.textContent = "立即刷新";
+                }
             }
         }
 
@@ -1442,6 +1460,15 @@
                 refreshRealtime();
             });
         });
+        if (refreshButton) scope.listen(refreshButton, "click", refreshRealtime);
+        if (refreshIntervalSelector) scope.listen(refreshIntervalSelector, "change", function () {
+            const requested = Number(refreshIntervalSelector.value);
+            refreshIntervalMS = allowedRefreshIntervals.includes(requested) ? requested : 10000;
+            refreshIntervalSelector.value = String(refreshIntervalMS);
+            try { window.localStorage.setItem(refreshPreferenceKey, String(refreshIntervalMS)); } catch (_) {}
+            startRealtimeRefreshTimer();
+            if (refreshIntervalMS > 0) refreshRealtime();
+        });
 
         if (filterTree) {
             scope.listen(filterTree, "click", function (event) {
@@ -1502,8 +1529,8 @@
 
         function startRealtimeRefreshTimer() {
             stopRealtimeRefreshTimer();
-            if (!isPageHidden()) {
-                realtimeRefreshTimer = scope.setInterval(refreshRealtime, 10000);
+            if (!isPageHidden() && refreshIntervalMS > 0) {
+                realtimeRefreshTimer = scope.setInterval(refreshRealtime, refreshIntervalMS);
             }
         }
 
@@ -1534,7 +1561,7 @@
                 pauseLayerAutoScrollers();
             } else {
                 startAlarmCarousel();
-                refreshRealtime();
+                if (refreshIntervalMS > 0) refreshRealtime();
                 startRealtimeRefreshTimer();
                 refreshLayerAutoScrollers();
             }
@@ -1549,7 +1576,7 @@
         });
         scope.listen(window, "pageshow", function (event) {
             if (event.persisted) {
-                refreshRealtime();
+                if (refreshIntervalMS > 0) refreshRealtime();
                 startRealtimeRefreshTimer();
                 startAlarmCarousel();
                 refreshLayerAutoScrollers();

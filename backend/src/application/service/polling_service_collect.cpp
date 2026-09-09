@@ -182,6 +182,7 @@ PollingService::MasterCollectionResult PollingService::execute_master_collection
         auto communication_lease =
             channel_manager_.acquire_communication_lease(worker_channel_id);
         channel_generation = channel_manager_.generation(worker_channel_id);
+        target.channel_generation = channel_generation;
         const auto* channel = channel_manager_.get_channel(worker_channel_id);
         if (channel == nullptr || !channel->config().enabled) {
             result.finished_at_ms = time_utils::system_now_ms();
@@ -227,7 +228,7 @@ PollingService::MasterCollectionResult PollingService::execute_master_collection
         if (result.error_message.empty()) result.error_message = "主控采集未生成设备区块结果";
         result.device_statuses = mark_devices_collect_failed(
             target, failure_time, result.error_message, result.collect_result.diagnosis_error_code);
-        data_store_.update_master_status(master_status);
+        result.discarded = !publish_master_status(master_status, worker_channel_id, channel_generation);
         target.next_poll_steady_ms =
             poll_started_at_steady_ms + master_config.poll_interval_ms;
         result.master_status = master_status;
@@ -288,6 +289,7 @@ PollingService::MasterCollectionResult PollingService::execute_master_collection
         }
     }
     if (!publish_device_statuses(statuses_to_store, worker_channel_id, channel_generation)) {
+        result.discarded = true;
         result.error_message = "通道配置已变化，丢弃旧配置采样";
         result.finished_at_ms = time_utils::system_now_ms();
         return result;
@@ -298,35 +300,7 @@ PollingService::MasterCollectionResult PollingService::execute_master_collection
             device_status->diagnosis.message,
             device_status->updated_at_ms);
     }
-    const auto time_generation = history_time_generation_.load();
-    std::size_t queued_points = 0;
-    for (const auto& status : statuses_to_store) queued_points += std::max<std::size_t>(1, status.points.size());
-    persistence_queue_.submit([this, master_config, statuses_to_store, time_generation] {
-        {
-            std::lock_guard<std::mutex> epoch_lock(persistence_epoch_mutex_);
-            if (time_generation != history_time_generation_.load()) return;
-            write_history_records(master_config, statuses_to_store, time_generation);
-        }
-        if (alarm_evaluator_ == nullptr) return;
-        bool failure_reported = false;
-        for (;;) {
-            std::string alarm_error;
-            {
-                std::lock_guard<std::mutex> epoch_lock(persistence_epoch_mutex_);
-                if (time_generation != history_time_generation_.load()) return;
-                if (is_ok(alarm_evaluator_->evaluate_batch(statuses_to_store, &alarm_error))) return;
-            }
-            // 不越过失败样本推进告警连续计数；重试等待不占用时间调整锁或通信锁。
-            if (!failure_reported) Logger::error("告警评估提交失败，暂停消费并重试：" + alarm_error);
-            failure_reported = true;
-            if (stop_requested_.load()) {
-                Logger::error("停止期间告警样本未能提交：" + alarm_error);
-                return;
-            }
-            std::unique_lock<std::mutex> lock(wait_mutex_);
-            wait_cv_.wait_for(lock, std::chrono::seconds(1), [this] { return stop_requested_.load(); });
-        }
-    }, queued_points);
+    enqueue_persistence(master_config, statuses_to_store);
 
     if (!result.map_result.success) {
         // 映射错误单独通过诊断与本次服务结果上报；通讯质量和完整通讯成功标记
@@ -352,7 +326,7 @@ PollingService::MasterCollectionResult PollingService::execute_master_collection
         master_status.last_error_message = result.error_message;
     }
 
-    data_store_.update_master_status(master_status);
+    result.discarded = !publish_master_status(master_status, worker_channel_id, channel_generation);
     target.next_poll_steady_ms =
         poll_started_at_steady_ms + master_config.poll_interval_ms;
     result.master_status = master_status;
@@ -365,6 +339,51 @@ PollingService::MasterCollectionResult PollingService::execute_master_collection
             " 主控 " + master_config.master_id + " 数据已写入运行缓存");
     }
     return result;
+}
+
+// 成功和失败样本共用有序队列，让普通通信失败也能中断告警连续计数。
+void PollingService::enqueue_persistence(
+    const MasterNodeConfig& master_config,
+    const std::vector<DeviceStatus>& statuses_to_store)
+{
+    if (statuses_to_store.empty() || (history_store_ == nullptr && alarm_evaluator_ == nullptr)) return;
+    const auto time_generation = history_time_generation_.load();
+    std::size_t queued_points = 0;
+    for (const auto& status : statuses_to_store) queued_points += std::max<std::size_t>(1, status.points.size());
+    const bool accepted = persistence_queue_.submit([this, master_config, statuses_to_store, time_generation](bool sampling_gap) {
+        const bool alarm_gap = persistence_alarm_gap_ || sampling_gap;
+        // 异常退出也必须保留缺口，只有整个评估成功后才能清除。
+        persistence_alarm_gap_ = true;
+        {
+            std::lock_guard<std::mutex> epoch_lock(persistence_epoch_mutex_);
+            if (time_generation != history_time_generation_.load()) {
+                persistence_alarm_gap_ = true;
+                return;
+            }
+            write_history_records(master_config, statuses_to_store, time_generation);
+        }
+        if (alarm_evaluator_ == nullptr) return;
+        std::string alarm_error;
+        std::lock_guard<std::mutex> epoch_lock(persistence_epoch_mutex_);
+        if (time_generation != history_time_generation_.load()) {
+            persistence_alarm_gap_ = true;
+            return;
+        }
+        // 每批只提交一次，持续故障由后续批次尝试恢复，不阻塞其他历史批次。
+        if (!is_ok(alarm_evaluator_->evaluate_batch(statuses_to_store, &alarm_error, alarm_gap))) {
+            persistence_alarm_gap_ = true;
+            Logger::error("告警评估提交失败，本批未保存；实时采集继续，后续批次重置连续计数：" + alarm_error);
+            return;
+        }
+        if (alarm_gap) Logger::warn("告警持久化已恢复，缺口前的连续计数已重置");
+        persistence_alarm_gap_ = false;
+    }, queued_points);
+    if (!accepted && !persistence_overflow_reported_.exchange(true)) {
+        Logger::error("采集持久化队列已满，本批历史及告警样本未入队；实时采集继续");
+    } else if (accepted && persistence_overflow_reported_.exchange(false)) {
+        Logger::warn("采集持久化队列恢复接收，期间存在历史及告警样本缺口");
+    }
+
 }
 
 // 合并旧状态和本轮状态，准备写入 DataStore。

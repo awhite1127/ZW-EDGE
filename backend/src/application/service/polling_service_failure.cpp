@@ -64,13 +64,17 @@ PollingService::MasterCollectionResult PollingService::mark_master_collection_fa
         master_status.consecutive_failure_count);
     master_status.diagnosis.message = error_message;
     master_status.last_error_message = error_message;
-    data_store_.update_master_status(master_status);
+    if (!publish_master_status(master_status, master_config.channel_id, target.channel_generation)) {
+        result.discarded = true;
+        return result;
+    }
 
     result.master_status = master_status;
     result.device_statuses = mark_devices_collect_failed(
         target,
         result.finished_at_ms,
         error_message, error_code);
+    result.discarded = channel_manager_.generation(master_config.channel_id) != target.channel_generation;
     return result;
 }
 
@@ -84,6 +88,7 @@ void PollingService::account_master_collection_result(
     std::size_t* failed_device_count,
     std::string* first_error_message)
 {
+    if (result.discarded) return;
     if (!result.success) {
         if (failed_master_count != nullptr) {
             ++(*failed_master_count);
@@ -189,7 +194,11 @@ std::vector<DeviceStatus> PollingService::mark_devices_collect_failed(
             devices, failure_time_ms, error_message, error_code);
     }
     if (!failed_statuses.empty()) {
-        publish_device_statuses(failed_statuses);
+        if (!publish_device_statuses(failed_statuses, master_config.channel_id, target.channel_generation)) {
+            failed_statuses.clear();
+        } else {
+            enqueue_persistence(master_config, failed_statuses);
+        }
     }
     return failed_statuses;
 }

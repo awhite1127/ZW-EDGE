@@ -1,5 +1,6 @@
 #include "data/datastore/alarm_store.h"
 #include "application/service/alarm_evaluator.h"
+#include "application/service/polling_service.h"
 
 #include <atomic>
 #include <chrono>
@@ -415,8 +416,128 @@ bool test_concurrent_batches_and_unlocked_dispatch()
 
 }  // namespace
 
+bool test_sampling_gap_resets_continuity()
+{
+    TemporaryAlarmDatabase database;
+    AlarmStore store;
+    AlarmEvaluator evaluator;
+    std::string error;
+    if (!initialize_fixture(&database, &store, &evaluator, {"gap"}, {}, &error)) return false;
+    auto rule = make_rule("gap");
+    rule.trigger_count = 3;
+    rule.recovery_count = 3;
+    if (!is_ok(evaluator.upsert_rule(rule, make_context("gap"), &error))) return false;
+    const auto sample = [&](double value, TimestampMs time, bool gap = false) {
+        return is_ok(evaluator.evaluate_batch({make_status("gap", value, time)}, &error, gap));
+    };
+    if (!sample(20, 100) || !sample(20, 101)) return false;
+    if (!database.execute(
+            "CREATE TRIGGER fail_gap BEFORE INSERT ON alarm_runtime_states "
+            "BEGIN SELECT RAISE(ABORT,'injected gap failure'); END;", &error)) return false;
+    if (!expect(!sample(20, 102, true), "gap reset unexpectedly committed during database failure")) return false;
+    std::vector<AlarmRuntimeState> retained;
+    if (!is_ok(store.list_runtime_states(&retained, &error)) ||
+        !expect(retained.size() == 1 && retained.front().consecutive_trigger_count == 2,
+                "failed gap transaction changed persisted count")) return false;
+    if (!database.execute("DROP TRIGGER fail_gap;", &error) || !sample(20, 102, true)) return false;
+    if (!expect(evaluator.list_active_alarms().empty(), "gap falsely completed trigger count")) return false;
+    if (!sample(20, 103) || !sample(20, 104)) return false;
+    if (!expect(evaluator.list_active_alarms().size() == 1, "trigger did not recover after gap")) return false;
+    if (!sample(0, 105) || !sample(0, 106) || !sample(0, 107, true)) return false;
+    if (!expect(evaluator.list_active_alarms().size() == 1, "gap falsely cleared active alarm")) return false;
+    if (!sample(0, 108) || !sample(0, 109)) return false;
+    return expect(evaluator.list_active_alarms().empty(), "recovery did not resume after gap");
+}
+
+bool test_failed_samples_break_consecutive_counts()
+{
+    for (int failure_kind = 0; failure_kind < 4; ++failure_kind) {
+        TemporaryAlarmDatabase database;
+        AlarmStore store;
+        AlarmEvaluator evaluator;
+        std::string error;
+        if (!initialize_fixture(&database, &store, &evaluator, {"device", "other"}, {}, &error)) return false;
+        for (const auto& id : {"device", "other"}) {
+            auto rule = make_rule(id);
+            rule.trigger_count = rule.recovery_count = 3;
+            if (!is_ok(evaluator.upsert_rule(rule, make_context(id), &error))) return false;
+        }
+        const auto sample = [&](double value, TimestampMs time) {
+            return is_ok(evaluator.evaluate_batch({make_status("device", value, time)}, &error));
+        };
+        const auto failure = [&](TimestampMs time) {
+            auto status = make_status("device", 20, time);
+            if (failure_kind == 0) status.online = false;
+            if (failure_kind == 1) status.points.front().valid = false;
+            if (failure_kind == 2) status.points.front().quality = DataQuality::kBad;
+            if (failure_kind == 3) status.points.clear();
+            // 单设备兼容入口也必须处理断线。
+            evaluator.evaluate(status);
+        };
+        for (TimestampMs time : {100ULL, 101ULL}) {
+            if (!is_ok(evaluator.evaluate_batch({make_status("device", 20, time), make_status("other", 20, time)}, &error))) return false;
+        }
+        failure(102);
+        if (!sample(20, 103)) return false;
+        if (!expect(evaluator.list_active_alarms().empty(), "failed sample completed trigger count")) return false;
+        if (!is_ok(evaluator.evaluate_batch({make_status("other", 20, 103)}, &error))) return false;
+        auto active = evaluator.list_active_alarms();
+        if (!expect(active.size() == 1 && active.front().device_id == "other", "failure reset unrelated device")) return false;
+        if (!sample(20, 104) || !sample(20, 105) || !sample(0, 106) || !sample(0, 107)) return false;
+        failure(108);
+        if (!sample(0, 109)) return false;
+        if (!expect(evaluator.list_active_alarms().size() == 2, "failure falsely recovered active alarm")) return false;
+        if (!sample(0, 110) || !sample(0, 111)) return false;
+        if (!expect(evaluator.list_active_alarms().size() == 1, "recovery count did not restart")) return false;
+    }
+    return true;
+}
+
+namespace edge_controller {
+struct PollingServiceTestAccess {
+    static bool test_prepare_failure_reaches_alarm_evaluator() {
+        TemporaryAlarmDatabase database;
+        AlarmStore alarm_store;
+        AlarmEvaluator evaluator;
+        std::string error;
+        if (!initialize_fixture(&database, &alarm_store, &evaluator, {"device"}, {}, &error)) return false;
+        auto rule = make_rule("device");
+        rule.trigger_count = 3;
+        if (!is_ok(evaluator.upsert_rule(rule, make_context("device"), &error))) return false;
+        SystemConfig config;
+        ChannelConfig channel;
+        channel.channel_id = "channel";
+        channel.channel_type = ChannelType::kModbusTcp;
+        config.channels.push_back(channel);
+        ChannelManager manager;
+        if (!is_ok(manager.initialize(config.channels, &error))) return false;
+        DataStore data_store;
+        data_store.update_device_status(make_status("device", 20, 101));
+        PollingService polling(config, manager, data_store, nullptr, nullptr, &evaluator, 1000);
+        DeviceConfig device;
+        device.device_id = "device";
+        device.master_id = "master";
+        PollingService::MasterPollingTarget target;
+        target.master.master_id = "master";
+        target.master.channel_id = "channel";
+        target.channel_generation = manager.generation("channel");
+        target.devices.push_back(&device);
+        polling.persistence_queue_.start();
+        polling.enqueue_persistence(target.master, {make_status("device", 20, 100)});
+        polling.enqueue_persistence(target.master, {make_status("device", 20, 101)});
+        polling.mark_devices_collect_failed(target, 102, "port unavailable", DiagnosisErrorCode::kChannelOpenFailed);
+        polling.enqueue_persistence(target.master, {make_status("device", 20, 103)});
+        polling.persistence_queue_.stop();
+        return expect(evaluator.list_active_alarms().empty(), "prepare failure was not queued between good samples");
+    }
+};
+}
+
 int main()
 {
+    if (!edge_controller::PollingServiceTestAccess::test_prepare_failure_reaches_alarm_evaluator()) return 1;
+    if (!test_failed_samples_break_consecutive_counts()) return 1;
+    if (!test_sampling_gap_resets_continuity()) return 1;
     if (!test_failure_atomicity()) return 1;
     if (!test_concurrent_batches_and_unlocked_dispatch()) return 1;
     return 0;

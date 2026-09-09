@@ -106,17 +106,20 @@ public:
     void set_device_status_update_callback(DeviceStatusUpdateCallback callback);
 
 private:
+    friend struct PollingServiceTestAccess;
     struct MasterPollingTarget {
         MasterNodeConfig master;
         std::vector<const DeviceConfig*> devices;
         MasterCollectorRuntimePlan collector_runtime;
         RegisterMapperRuntimePlan mapper_runtime;
         std::uint64_t template_generation{0};
+        std::uint64_t channel_generation{0};
         // 仅用于进程内调度；使用稳态时钟，避免系统时间校准改变轮询节奏。
         TimestampMs next_poll_steady_ms{0};
     };
 
     struct MasterCollectionResult {
+        bool discarded{false};
         bool success{false};
         bool communication_success{false};
         bool mapping_success{false};
@@ -168,6 +171,8 @@ private:
     std::vector<DeviceStatus> prepare_device_statuses_for_store(
         const std::vector<DeviceStatus>& statuses) const;
     // 写入历史数据记录。
+    void enqueue_persistence(const MasterNodeConfig& master_config,
+        const std::vector<DeviceStatus>& statuses);
     void write_history_records(
         const MasterNodeConfig& master_config,
         const std::vector<DeviceStatus>& statuses,
@@ -241,14 +246,19 @@ private:
     CommunicationTraceStore* communication_trace_store_{nullptr};
     AlarmEvaluator* alarm_evaluator_{nullptr};
     bool publish_device_statuses(const std::vector<DeviceStatus>& statuses,
-        const ChannelId& channel = {}, std::uint64_t generation = 0);
+        const ChannelId& channel, std::uint64_t generation);
+    bool publish_master_status(const MasterNodeStatus& status,
+        const ChannelId& channel, std::uint64_t generation);
     void expire_device_values(bool stopped);
     void freshness_worker_loop();
     std::mutex publication_mutex_;
     std::thread freshness_worker_;
     std::mutex persistence_epoch_mutex_;
     OrderedTaskQueue persistence_queue_;
-    // worker 等待粒度；各主站仍按自身周期调度。
+    // 仅持久化消费者访问；数据库失败后下一批必须重新建立连续计数。
+    bool persistence_alarm_gap_{false};
+    std::atomic<bool> persistence_overflow_reported_{false};
+    // 无目标时的等待上限；正常运行按最近主站到期时间唤醒。
     std::uint32_t poll_interval_ms_{1000};
     ErrorEventCallback error_event_callback_{};
     mutable std::mutex device_status_callback_mutex_;

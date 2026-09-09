@@ -11,7 +11,8 @@
 
 namespace edge_controller {
 
-// 单消费者保持样本顺序；容量耗尽时背压，关闭时排空已接受任务。
+// 单消费者保持已接受样本的顺序；满载拒绝新任务，绝不阻塞实时采集。
+// 下一项接受的任务携带缺口标记，消费方不得跨缺口累计连续样本。
 class OrderedTaskQueue {
 public:
     ~OrderedTaskQueue() { stop(); }
@@ -21,12 +22,17 @@ public:
         try { worker_ = std::thread([this] { run(); }); }
         catch (...) { accepting_ = false; throw; }
     }
-    bool submit(std::function<void()> task, std::size_t points) {
-        const auto weight = std::min<std::size_t>(16384, std::max<std::size_t>(1, points));
+    bool submit(std::function<void(bool)> task, std::size_t points) {
+        const auto weight = std::max<std::size_t>(1, points);
         std::unique_lock<std::mutex> lock(mutex_);
-        changed_.wait(lock, [this, weight] { return !accepting_ || (tasks_.size() < 128 && queued_points_ + weight <= 16384); });
         if (!accepting_) return false;
-        tasks_.push_back({std::move(task), weight});
+        if (tasks_.size() >= 128 || weight > 16384 - queued_points_) {
+            gap_pending_ = true;
+            return false;
+        }
+        const bool gap = gap_pending_;
+        tasks_.push_back({[task = std::move(task), gap] { task(gap); }, weight});
+        gap_pending_ = false;
         queued_points_ += weight;
         changed_.notify_all();
         return true;
@@ -62,6 +68,7 @@ private:
     std::deque<std::pair<std::function<void()>, std::size_t>> tasks_;
     std::size_t queued_points_{0};
     bool accepting_{false};
+    bool gap_pending_{false};
     std::thread worker_;
 };
 

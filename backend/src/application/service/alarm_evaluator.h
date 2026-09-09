@@ -69,7 +69,8 @@ public:
     // 按采集顺序原子评估一批设备状态。
     StatusCode evaluate_batch(
         const std::vector<DeviceStatus>& statuses,
-        std::string* error_message = nullptr);
+        std::string* error_message = nullptr,
+        bool sampling_gap = false);
     // 评估。
     void evaluate(const DeviceStatus& status);
     // 保存当前告警评估时间。
