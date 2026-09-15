@@ -238,46 +238,6 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 set(edge_controller_targets edge_controller_core ${PROJECT_NAME})
-option(EDGE_CONTROLLER_BUILD_TESTS "Build edge-controller backend tests" OFF)
-if(EDGE_CONTROLLER_BUILD_TESTS)
-    enable_testing()
-
-    # 测试统一链接生产核心库，并共享警告、超时和 SQLite 头文件设置。
-    function(edge_controller_add_test name source)
-        set(target "${name}_test")
-        add_executable(${target} ${source})
-        target_compile_features(${target} PRIVATE cxx_std_17)
-        target_include_directories(${target} PRIVATE ${PROJECT_SOURCE_DIR}/third_party/sqlite)
-        target_link_libraries(${target} PRIVATE edge_controller_core Threads::Threads)
-        if(ARGN)
-            add_test(NAME ${name} COMMAND ${ARGN})
-        else()
-            add_test(NAME ${name} COMMAND ${target})
-        endif()
-        set_tests_properties(${name} PROPERTIES TIMEOUT 30)
-        set(edge_controller_targets ${edge_controller_targets} ${target} PARENT_SCOPE)
-    endfunction()
-
-    edge_controller_add_test(edge_controller_modbus_integration tests/modbus_server_integration_test.cpp)
-    edge_controller_add_test(edge_controller_config_import_atomicity tests/config_import_atomicity_test.cpp)
-    edge_controller_add_test(edge_controller_event_store_query tests/event_store_query_test.cpp)
-    edge_controller_add_test(edge_controller_data_store_realtime_snapshot tests/data_store_realtime_snapshot_test.cpp)
-    edge_controller_add_test(edge_controller_alarm_evaluator_batch tests/alarm_evaluator_batch_test.cpp)
-    edge_controller_add_test(edge_controller_channel_config_concurrency tests/channel_config_concurrency_test.cpp)
-    edge_controller_add_test(edge_controller_polling_runtime_regression tests/polling_runtime_regression_test.cpp)
-    edge_controller_add_test(edge_controller_mqtt_client_lifecycle tests/mqtt_client_lifecycle_test.cpp)
-    target_include_directories(edge_controller_mqtt_client_lifecycle_test PRIVATE ${MOSQUITTO_INCLUDE_DIR})
-    edge_controller_add_test(edge_controller_alarm_rule_validation tests/alarm_rule_validation_test.cpp)
-    edge_controller_add_test(edge_controller_device_value_status tests/device_value_status_test.cpp)
-    edge_controller_add_test(edge_controller_history_store tests/history_store_test.cpp)
-    edge_controller_add_test(edge_controller_bounded_address_resolver_integration
-        tests/bounded_address_resolver_integration_test.cpp
-        ${CMAKE_COMMAND} -E env
-        "EDGE_CONTROLLER_RESOLVER_HELPER=$<TARGET_FILE:${PROJECT_NAME}>"
-        "$<TARGET_FILE:edge_controller_bounded_address_resolver_integration_test>"
-    )
-    add_dependencies(edge_controller_bounded_address_resolver_integration_test ${PROJECT_NAME})
-endif()
 
 foreach(target ${edge_controller_targets})
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

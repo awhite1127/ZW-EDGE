@@ -61,7 +61,6 @@ namespace edge_controller {
 // BackendService 是 backend 侧统一服务入口。
 // Web / IPC 通过这一层访问配置、状态、轮询、实时数据和历史事件。
 class BackendService {
-    friend struct BackendChannelConfigTestAccess;
 public:
 
     ~BackendService();

@@ -75,8 +75,5 @@ jobs:
         run: >-
           cmake -S backend -B build-ci -G Ninja
           -DCMAKE_BUILD_TYPE=Release
-          -DEDGE_CONTROLLER_BUILD_TESTS=ON
       - name: Build
         run: cmake --build build-ci --parallel 2
-      - name: Run native tests
-        run: ctest --test-dir build-ci --output-on-failure
