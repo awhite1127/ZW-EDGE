@@ -16,6 +16,7 @@ import (
 
 	webassets "edge-web"
 	"edge-web/internal/model"
+	"edge-web/internal/service"
 )
 
 // staticAssetVersion 在进程初始化时只计算一次。相同的内嵌 CSS/JS 得到相同版本，
@@ -76,6 +77,7 @@ func loadPageTemplates(templateDir string) (map[string]*template.Template, error
 
 	// 集中注册模板可调用的只读格式化函数。
 	funcMap := template.FuncMap{
+		"realtimeExplanation":      service.RealtimeExplanation,
 		"formatTimestamp":          formatTimestamp,
 		"formatDiagnosisTime":      formatDiagnosisTime,
 		"boolText":                 boolText,

@@ -105,6 +105,8 @@ StatusCode BackendService::update_device_display_name(
     }
 
     std::unique_lock<std::shared_mutex> lock(service_mutex_);
+    const auto ready = ensure_config_mutation_ready_locked("缺少设备名称更新结果", result, error_message);
+    if (!is_ok(ready)) return ready;
     const auto found = std::find_if(
         system_config_.devices.begin(), system_config_.devices.end(),
         [&](const DeviceConfig& device) { return device.device_id == device_id; });
@@ -157,6 +159,8 @@ StatusCode BackendService::update_device_display_names_batch(
     };
 
     std::unique_lock<std::shared_mutex> lock(service_mutex_);
+    const auto ready = ensure_config_mutation_ready_locked("缺少设备名称更新结果", result, error_message);
+    if (!is_ok(ready)) return ready;
     std::vector<PendingUpdate> pending;
     std::vector<DeviceAlias> aliases;
     std::unordered_set<std::string> seen_device_ids;

@@ -1,3 +1,6 @@
+/* hidden 是交互状态约定，不能被按钮或网格的 display 样式覆盖。 */
+[hidden]:not([hidden="until-found"]) { display: none !important; }
+
 /*
  * 控制台统一视觉入口。颜色、密度、圆角和最小宽度优先通过变量调整；
  * 页面专属规则按概览、事件、实时、采集、设置、登录顺序组织。
@@ -3065,7 +3068,9 @@ textarea:focus-visible,
 
 .realtime-data-shell .monitor-table th,
 .realtime-data-shell .monitor-table td { padding: 10px 8px; vertical-align: middle; }
-.realtime-data-shell .hierarchy-cell { gap: 2px; align-content: center; }
+.realtime-data-shell .hierarchy-cell { gap: 2px; align-content: center; grid-template-columns: minmax(0, 1fr); min-width: 0; }
+.realtime-data-shell .hierarchy-primary { width: 100%; max-width: 100%; }
+.realtime-data-shell .hierarchy-primary > strong { white-space: normal; overflow-wrap: anywhere; }
 .realtime-data-shell .hierarchy-cell strong { font-size: 16px; line-height: 1.25; }
 .realtime-data-shell .hierarchy-line { font-size: 12px; line-height: 1.25; }
 .realtime-data-shell .metric-list,
@@ -11579,11 +11584,77 @@ code {
     }
 }
 
-/* 实时数据列按信息长度约束，数据区优先占用主体宽度。 */
-.realtime-data-shell .monitor-table { width: 100%; min-width: 0; }
-.realtime-data-shell .monitor-table col.col-hierarchy { width: clamp(218px, 21vw, 340px); }
-.realtime-data-shell .monitor-table col.col-reading { width: auto; }
-.realtime-data-shell .monitor-table col.col-diagnosis { width: clamp(210px, 20vw, 330px); }
+/* 每条设备信息独立分配名称、数据、说明宽度，剩余空白保留在行末。 */
+#realtime-table {
+    --realtime-name-width: 230px;
+    display: block;
+    width: 100%;
+    min-width: 0;
+}
+#realtime-table colgroup { display: none; }
+#realtime-table thead,
+#realtime-table tbody { display: block; width: 100%; }
+#realtime-table tr { display: flex; width: 100%; align-items: center; }
+#realtime-table th,
+#realtime-table td { display: block; padding: 8px; min-width: 0; border-bottom: 0; }
+#realtime-table tr { border-bottom: 1px solid var(--color-border-subtle); }
+#realtime-table th:first-child,
+#realtime-table .realtime-cell-hierarchy { flex: 0 0 var(--realtime-name-width); }
+#realtime-table th:last-child { flex: 1; max-width: none; }
+#realtime-table .realtime-cell-reading {
+    flex: 0 0 auto;
+    width: max-content;
+    max-width: calc(100% - var(--realtime-name-width) - 16px);
+    padding-right: 0;
+}
+#realtime-table .realtime-cell-error {
+    flex: 1 1 0;
+    max-width: 210px;
+    align-self: center;
+    font-size: 14px;
+}
+#realtime-table .realtime-cell-error.is-space-hidden {
+    visibility: hidden;
+    height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    overflow: hidden;
+}
+#realtime-table .metric-chip-invalid { border-color: #d8737b; }
+#realtime-table .realtime-explanation { display: block; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; }
+#realtime-table .metric-list,
+#realtime-table .metric-list-ungrouped {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    width: max-content;
+    max-width: 100%;
+    columns: auto;
+    gap: 4px;
+}
+#realtime-table .metric-chip {
+    flex: 0 0 auto;
+    width: max-content;
+    max-width: 100%;
+    min-height: 0;
+    margin: 0;
+    padding: 4px 7px;
+    gap: 5px;
+}
+#realtime-table .metric-group-list {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    width: max-content;
+    max-width: 100%;
+    gap: 8px;
+}
+#realtime-table .metric-group { flex: 0 0 auto; width: max-content; max-width: 100%; padding: 6px; }
+#realtime-table .metric-group-points { justify-items: start; gap: 4px; }
+#realtime-table .metric-group-title { margin-bottom: 4px; }
+@media (max-width: 900px) {
+    #realtime-table { --realtime-name-width: 160px; }
+}
 
 .realtime-data-shell .metric-list {
     display: grid;
@@ -12474,17 +12545,20 @@ code {
     }
 
     .realtime-data-shell .monitor-table col.col-hierarchy {
-        width: 210px;
+        width: 230px;
     }
 
     .realtime-data-shell .monitor-table col.col-diagnosis {
-        display: none;
-        width: 0;
+        width: 210px;
     }
 
-    .realtime-data-shell .realtime-diagnosis-heading,
     .realtime-data-shell .realtime-cell-error {
-        display: none;
+        font-size: 14px;
+    }
+
+    .realtime-data-shell .realtime-cell-error .table-message {
+        white-space: normal;
+        overflow-wrap: anywhere;
     }
 
     .metric-group-list {
@@ -13638,14 +13712,14 @@ html.motion-reduced *::after {
     font-weight: 700;
 }
 
-/* 10.1 英寸横屏：填满侧栏纵向空间，并放大有明显留白的信息卡内容。 */
+/* 10.1 英寸横屏：菜单按固定间距从顶部排列，避免权限较少时被拉散。 */
 @media (min-width: 901px) and (max-width: 1366px) and (max-height: 900px) {
     .sidebar-shell .side-nav {
         flex: 1 1 auto;
         min-height: 0;
         max-height: none;
         grid-auto-rows: minmax(72px, 96px);
-        align-content: space-between;
+        align-content: start;
         gap: 5px;
         overflow-y: auto;
     }

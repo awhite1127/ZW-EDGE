@@ -27,7 +27,9 @@ jobs:
             scripts/release-arm64-rk3562.sh
       - name: Validate release scripts
         run: |
-          find scripts -type f -name '*.sh' -exec bash -n {} +
+          while IFS= read -r -d '' file; do
+            bash -n "$file" || exit 1
+          done < <(find scripts -type f -name '*.sh' -print0)
           python3 -m py_compile \
             scripts/product-version.py \
             scripts/rk3562/update-manager.py
@@ -50,7 +52,10 @@ jobs:
       - name: Test with race detector
         run: go test -race ./...
       - name: Check JavaScript syntax
-        run: find static -type f -name '*.js' -exec node --check {} +
+        run: |
+          while IFS= read -r -d '' file; do
+            node --check "$file" || exit 1
+          done < <(find static -type f -name '*.js' -print0)
       - name: Cross-build ARM64 release binary
         env:
           CGO_ENABLED: "0"

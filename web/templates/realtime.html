@@ -150,8 +150,7 @@
                 <thead>
                     <tr>
                         <th>设备</th>
-                        <th>数据</th>
-                        <th class="realtime-diagnosis-heading">说明</th>
+                        <th colspan="2">数据 / 说明</th>
                     </tr>
                 </thead>
                 <tbody id="realtime-table-body">
@@ -160,7 +159,7 @@
                         <td class="realtime-cell-hierarchy">
                             <div class="hierarchy-cell">
                                 <span class="hierarchy-line">{{defaultText .ChannelName}} / {{defaultText .MasterName}}</span>
-                                <span class="hierarchy-primary"><strong>{{defaultText .DeviceName}}</strong>{{if .ErrorMessage}}<span class="realtime-row-status status-bad">异常</span>{{else if .HasStatus}}{{if not .Online}}<span class="realtime-row-status status-warn">离线</span>{{end}}{{else}}<span class="realtime-row-status status-neutral">未采集</span>{{end}}</span>
+                                <span class="hierarchy-primary"><strong>{{defaultText .DeviceName}}</strong></span>
                             </div>
                         </td>
                         <td class="realtime-cell-reading">
@@ -172,7 +171,7 @@
                                     <strong class="metric-group-title">{{defaultText .Name}}</strong>
                                     <div class="metric-group-points">
                                         {{range .Points}}
-                                        <span class="metric-chip {{if ne .StateClass "status-ok"}}metric-chip-warn{{end}} {{.StateClass}}" data-realtime-point-key="{{.StableKey}}" data-quality-state="{{.StateClass}}" title="{{if .Message}}{{.Message}}{{else}}{{.Quality}}{{end}}"><b>{{defaultText .Name}}</b><span class="metric-chip-reading"><em class="metric-chip-value" data-realtime-value-key="{{.StableKey}}">{{if .ValueText}}{{.ValueText}}{{else}}{{.Text}}{{end}}</em>{{if .Unit}}<small class="metric-chip-unit">{{.Unit}}</small>{{end}}</span></span>
+                                        <span class="metric-chip {{if not .Valid}}metric-chip-invalid {{end}}{{if ne .StateClass "status-ok"}}metric-chip-warn{{end}} {{.StateClass}}" data-realtime-point-key="{{.StableKey}}" data-quality-state="{{.StateClass}}" title="{{if .Message}}{{.Message}}{{else}}{{.Quality}}{{end}}"><b>{{defaultText .Name}}</b><span class="metric-chip-reading"><em class="metric-chip-value" data-realtime-value-key="{{.StableKey}}">{{if .ValueText}}{{.ValueText}}{{else}}{{.Text}}{{end}}</em>{{if .Unit}}<small class="metric-chip-unit">{{.Unit}}</small>{{end}}</span></span>
                                         {{end}}
                                     </div>
                                 </section>
@@ -181,7 +180,7 @@
                             {{else}}
                             <div class="metric-list metric-list-ungrouped{{if eq (len .SummaryPoints) 1}} metric-list-single{{end}}">
                                 {{range .SummaryPoints}}
-                                <span class="metric-chip {{if ne .StateClass "status-ok"}}metric-chip-warn{{end}} {{.StateClass}}" data-realtime-point-key="{{.StableKey}}" data-quality-state="{{.StateClass}}" title="{{if .Message}}{{.Message}}{{else}}{{.Quality}}{{end}}"><b>{{defaultText .Name}}</b><span class="metric-chip-reading"><em class="metric-chip-value" data-realtime-value-key="{{.StableKey}}">{{if .ValueText}}{{.ValueText}}{{else}}{{.Text}}{{end}}</em>{{if .Unit}}<small class="metric-chip-unit">{{.Unit}}</small>{{end}}</span></span>
+                                <span class="metric-chip {{if not .Valid}}metric-chip-invalid {{end}}{{if ne .StateClass "status-ok"}}metric-chip-warn{{end}} {{.StateClass}}" data-realtime-point-key="{{.StableKey}}" data-quality-state="{{.StateClass}}" title="{{if .Message}}{{.Message}}{{else}}{{.Quality}}{{end}}"><b>{{defaultText .Name}}</b><span class="metric-chip-reading"><em class="metric-chip-value" data-realtime-value-key="{{.StableKey}}">{{if .ValueText}}{{.ValueText}}{{else}}{{.Text}}{{end}}</em>{{if .Unit}}<small class="metric-chip-unit">{{.Unit}}</small>{{end}}</span></span>
                                 {{end}}
                             </div>
                             {{end}}
@@ -192,14 +191,7 @@
                             {{end}}
                         </td>
                         <td class="wrap-text realtime-cell-error">
-                            {{if .ErrorMessage}}
-                            <span class="table-message table-message-bad" title="{{.ErrorMessage}}">{{.ErrorMessage}}</span>
-                            {{with diagnosisSuggestionText .Diagnosis}}
-                            <small class="table-message-note">建议：{{.}}</small>
-                            {{end}}
-                            {{else}}
-                            <span class="table-message table-message-neutral">—</span>
-                            {{end}}
+                            <span class="realtime-explanation">{{realtimeExplanation .}}</span>
                         </td>
                     </tr>
                 {{end}}

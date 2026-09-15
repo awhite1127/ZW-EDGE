@@ -787,29 +787,29 @@ type RealtimePointGroup struct {
 // RealtimeRow 是实时页最终直接渲染的视图模型。
 // 它已经合并了配置、状态和实时快照中的主要字段。
 type RealtimeRow struct {
-	DeviceID                string                `json:"device_id"`
-	StableKey               string                `json:"-"`
-	SummaryKey              string                `json:"-"`
-	DeviceName              string                `json:"device_name"`
-	ChannelID               string                `json:"channel_id"`
-	ChannelName             string                `json:"channel_name"`
-	MasterID                string                `json:"master_id"`
-	MasterName              string                `json:"master_name"`
-	TemplateID              string                `json:"template_id"`
-	TemplateName            string                `json:"template_name"`
-	TemplateFields          []DeviceTemplateField `json:"template_fields"`
-	Online                  bool                  `json:"online"`
-	HasStatus               bool                  `json:"has_status"`
-	HasRealtime             bool                  `json:"has_realtime"`
-	UpdatedAtMS             uint64                `json:"updated_at_ms"`
-	Diagnosis               DiagnosisStatus       `json:"diagnosis"`
-	ErrorMessage            string                `json:"error_message"`
-	CommunicationQuality    string                `json:"communication_quality"`
-	SummaryPoints           []RealtimePointRow    `json:"summary_points"`
-	RealtimeGroupingEnabled bool                  `json:"realtime_grouping_enabled"`
-	RealtimeGroups          []RealtimePointGroup  `json:"realtime_groups"`
-	SummaryText             string                `json:"summary_text"`
-	ResistanceText          string                `json:"resistance_text"`
+	DeviceID                string               `json:"device_id"`
+	StableKey               string               `json:"-"`
+	SummaryKey              string               `json:"-"`
+	DeviceName              string               `json:"device_name"`
+	ChannelID               string               `json:"channel_id"`
+	ChannelName             string               `json:"channel_name"`
+	MasterID                string               `json:"master_id"`
+	MasterName              string               `json:"master_name"`
+	TemplateID              string               `json:"template_id"`
+	TemplateName            string               `json:"template_name"`
+	Online                  bool                 `json:"online"`
+	HasStatus               bool                 `json:"has_status"`
+	HasRealtime             bool                 `json:"has_realtime"`
+	UpdatedAtMS             uint64               `json:"updated_at_ms"`
+	Diagnosis               DiagnosisStatus      `json:"diagnosis"`
+	ErrorMessage            string               `json:"error_message"`
+	Explanation             string               `json:"explanation"`
+	CommunicationQuality    string               `json:"communication_quality"`
+	SummaryPoints           []RealtimePointRow   `json:"summary_points"`
+	RealtimeGroupingEnabled bool                 `json:"realtime_grouping_enabled"`
+	RealtimeGroups          []RealtimePointGroup `json:"realtime_groups"`
+	SummaryText             string               `json:"summary_text"`
+	ResistanceText          string               `json:"resistance_text"`
 }
 
 // RealtimeLayerItem 表示实时页通道层或主站层摘要。

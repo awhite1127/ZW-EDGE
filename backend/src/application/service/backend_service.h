@@ -61,6 +61,7 @@ namespace edge_controller {
 // BackendService 是 backend 侧统一服务入口。
 // Web / IPC 通过这一层访问配置、状态、轮询、实时数据和历史事件。
 class BackendService {
+    friend struct BackendChannelConfigTestAccess;
 public:
 
     ~BackendService();
@@ -627,7 +628,9 @@ private:
     mutable std::shared_mutex service_mutex_;
     // 网络配置保存、应用和失败回滚必须完整串行；锁顺序固定为本锁 -> service_mutex_。
     mutable std::mutex network_operation_mutex_;
-    // 手动 Modbus 命令串行访问 ChannelManager；不阻塞只读页面快照。
+    // 通道应用与关闭串行；锁顺序为本锁 -> manual_modbus_mutex_ -> service_mutex_。
+    mutable std::mutex channel_operation_mutex_;
+    // 手动 Modbus 与通道应用串行访问 ChannelManager；先于 service_mutex_ 获取。
     mutable std::mutex manual_modbus_mutex_;
     mutable std::mutex error_mutex_;
     mutable std::mutex time_service_mutex_;

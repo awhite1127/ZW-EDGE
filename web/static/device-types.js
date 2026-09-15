@@ -1289,7 +1289,7 @@
 
         root.querySelectorAll("[data-template-step-target]").forEach(function (tab) {
             pageScope.listen(tab, "click", function () {
-                try { showStep(Number(tab.dataset.templateStepTarget), currentStep === 1); }
+                try { showStep(Number(tab.dataset.templateStepTarget), currentStep === 1); setFeedback(feedback, "", ""); }
                 catch (error) { setFeedback(feedback, "error", error.message); }
             });
         });

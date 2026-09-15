@@ -256,6 +256,8 @@ void BackendService::shutdown()
         last_time_adjustment_after_ms_ = 0;
         last_time_adjustment_delta_ms_ = 0;
     }
+    // 等待通道应用结束；不持手动命令锁 join 北向服务，避免等待其命令线程。
+    std::lock_guard<std::mutex> channel_lock(channel_operation_mutex_);
     std::shared_ptr<PollingService> polling_to_stop;
     {
         std::unique_lock<std::shared_mutex> lock(service_mutex_);

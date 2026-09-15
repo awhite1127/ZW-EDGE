@@ -19,6 +19,9 @@ StatusCode BackendService::create_channel_config(
     ChannelConfigUpdateResult* result,
     std::string* error_message)
 {
+    // 与手动 I/O 和 shutdown 串行；等待通道租约时不占用页面快照锁。
+    std::lock_guard<std::mutex> channel_lock(channel_operation_mutex_);
+    std::lock_guard<std::mutex> command_lock(manual_modbus_mutex_);
     std::unique_lock<std::shared_mutex> lock(service_mutex_);
     const auto ready_status =
         ensure_config_mutation_ready_locked("缺少通道创建结果输出参数", result, error_message);
@@ -74,6 +77,9 @@ StatusCode BackendService::update_channel_config(
     ChannelConfigUpdateResult* result,
     std::string* error_message)
 {
+    // 与手动 I/O 和 shutdown 串行；等待通道租约时不占用页面快照锁。
+    std::lock_guard<std::mutex> channel_lock(channel_operation_mutex_);
+    std::lock_guard<std::mutex> command_lock(manual_modbus_mutex_);
     std::unique_lock<std::shared_mutex> lock(service_mutex_);
     const auto ready_status =
         ensure_config_mutation_ready_locked("缺少通道更新结果输出参数", result, error_message);
@@ -140,6 +146,9 @@ StatusCode BackendService::delete_channel_config(
     ChannelConfigDeleteResult* result,
     std::string* error_message)
 {
+    // 与手动 I/O 和 shutdown 串行；等待通道租约时不占用页面快照锁。
+    std::lock_guard<std::mutex> channel_lock(channel_operation_mutex_);
+    std::lock_guard<std::mutex> command_lock(manual_modbus_mutex_);
     std::unique_lock<std::shared_mutex> lock(service_mutex_);
     const auto ready_status =
         ensure_config_mutation_ready_locked("缺少通道删除结果输出参数", result, error_message);
@@ -191,13 +200,19 @@ StatusCode BackendService::apply_channel_configs_locked(
     const auto topology_status = next_topology.build(next_config, error_message);
     if (!is_ok(topology_status)) return topology_status;
     const auto previous_channels = system_config_.channels;
-    // 配置锁保持到持久化及资源交换结束，避免控制命令持共享锁等待被本次应用占用的总线。
-    (void)lock;
+    // config_apply_in_progress_ 阻止其他配置应用，manual_modbus_mutex_ 阻止新手动 I/O。
+    // 仅等待物理资源租约时释放服务锁；持久化和资源/拓扑交换仍作为一次提交。
+    lock.unlock();
     try {
         const auto status = channel_manager_.apply_channels(channels,
-            [&] { return config_store_.save_channels(channels, error_message); }, error_message);
+            [&] {
+                lock.lock();
+                return config_store_.save_channels(channels, error_message);
+            }, error_message);
+        if (!lock.owns_lock()) lock.lock();
         if (!is_ok(status)) return status;
     } catch (const std::exception& error) {
+        if (!lock.owns_lock()) lock.lock();
         if (error_message) *error_message = std::string("准备通道配置失败：") + error.what();
         return StatusCode::kInternalError;
     }

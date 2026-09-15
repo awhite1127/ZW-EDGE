@@ -9,7 +9,6 @@
     const readTreeState = EdgeApp.readTreeState;
     const writeTreeState = EdgeApp.writeTreeState;
     const friendlyApiMessage = EdgeApp.friendlyApiMessage;
-    const diagnosisSuggestion = EdgeApp.diagnosisSuggestion;
     const escapeHtml = EdgeApp.escapeHtml;
     const dataItemDisplayName = EdgeApp.dataItemDisplayName;
     const isPageHidden = EdgeApp.isPageHidden || function () { return false; };
@@ -77,6 +76,7 @@
         let lastSuccessfulRefreshText = refreshTime ? String(refreshTime.textContent || "").trim() : "";
         let realtimeRefreshInFlight = false;
         let realtimeRefreshTimer = null;
+        let rowLayoutTimer = null;
         let alarmCarouselTimer = null;
         let alarmCarouselIndex = 0;
         let alarmCarouselSignature = "";
@@ -101,6 +101,27 @@
         } else {
             renderCurrentRows(table.dataset.emptyText || "暂无实时数据");
         }
+        // 每行按内容宽度分配空间；说明不足以容纳短文本时让位给数据。
+        function scheduleRowLayout() {
+            if (rowLayoutTimer !== null) return;
+            rowLayoutTimer = scope.setTimeout(function () {
+                rowLayoutTimer = null;
+                const cells = Array.from(tbody.querySelectorAll(".realtime-cell-error"));
+                // 先读后写，避免逐行交错触发布局。
+                const hidden = cells.map(function (cell) { return cell.clientWidth < 170; });
+                cells.forEach(function (cell, index) {
+                    cell.classList.toggle("is-space-hidden", hidden[index]);
+                    cell.setAttribute("aria-hidden", hidden[index] ? "true" : "false");
+                });
+            }, 0);
+        }
+        if (window.ResizeObserver) {
+            const rowObserver = new ResizeObserver(scheduleRowLayout);
+            rowObserver.observe(table);
+            scope.onDispose(function () { rowObserver.disconnect(); });
+        }
+        scope.listen(window, "resize", scheduleRowLayout);
+        scheduleRowLayout();
         hydrateAlarmDeviceItems();
         channelAutoScroller = createSmoothLoopScroller(channelList, 1800);
         masterAutoScroller = createSmoothLoopScroller(masterList, 2300);
@@ -286,25 +307,14 @@
                     qualityChanges,
                     rowErrorMessage
                 );
-                const rowSuggestion = diagnosisSuggestion(row.diagnosis);
-                const errorCell = realtimeDataStale
+                const errorCell = (realtimeDataStale
                     ? '<span class="table-message table-message-neutral">缓存值 · 最后更新 ' +
                         escapeHtml(lastSuccessfulRefreshText || "未知") + "</span>"
-                    : rowErrorMessage
-                    ? [
-                        '<span class="table-message table-message-bad">',
-                        escapeHtml(rowErrorMessage),
-                        "</span>",
-                        rowSuggestion ? '<small class="table-message-note">建议：' + escapeHtml(rowSuggestion) + "</small>" : ""
-                    ].join("")
-                    : '<span class="table-message table-message-neutral">—</span>';
+                    : '<span class="realtime-explanation">' + escapeHtml(row.explanation || (rowErrorMessage ? "采集异常，请检查设备" : !row.has_status ? "尚未采集，等待数据" : !row.online ? "设备离线，请检查连接" : "—")) + '</span>');
                 const hierarchy = [
                     '<div class="hierarchy-cell">',
                     '<span class="hierarchy-line">', escapeHtml(row.channel_name || row.channel_id || "-"), " / ", escapeHtml(row.master_name || row.master_id || "-"), "</span>",
                     '<span class="hierarchy-primary"><strong>', escapeHtml(row.device_name || "未命名设备"), "</strong>",
-                    rowStatus.showLabel
-                        ? '<span class="realtime-row-status ' + rowStatus.className + '">' + rowStatus.text + "</span>"
-                        : "",
                     "</span>",
                     "</div>"
                 ].join("");
@@ -334,32 +344,17 @@
             if (canPatchRows) {
                 renderedRows.forEach(function (entry, index) {
                     const rowNode = currentRows[index];
-                    const previousStatus = rowNode.querySelector(".realtime-row-status");
-                    const previousSignature = previousStatus
-                        ? String(previousStatus.textContent || "").trim() + "|" + previousStatus.className
-                        : "";
                     if (rowNode.className !== entry.className) rowNode.className = entry.className;
                     setHTMLIfChanged(rowNode.querySelector(".realtime-cell-hierarchy"), entry.hierarchy);
                     reconcileRealtimeReading(rowNode.querySelector(".realtime-cell-reading"), entry.reading);
                     setHTMLIfChanged(rowNode.querySelector(".realtime-cell-error"), entry.error);
-                    const nextStatus = rowNode.querySelector(".realtime-row-status");
-                    const nextSignature = nextStatus
-                        ? String(nextStatus.textContent || "").trim() + "|" + nextStatus.className
-                        : "";
-                    if (nextStatus && previousSignature && previousSignature !== nextSignature) {
-                        rowStatusChanges.push({
-                            element: nextStatus,
-                            previous: previousSignature,
-                            next: nextSignature,
-                            critical: entry.status.className === "status-bad" || entry.status.text === "离线"
-                        });
-                    }
                 });
             } else {
                 setHTMLIfChanged(tbody, renderedRows.map(function (entry) {
                     return entry.markup;
                 }).join(""));
             }
+            scheduleRowLayout();
             applyRealtimeMotion(valueChanges, qualityChanges, rowStatusChanges);
             Object.keys(realtimePointValues).forEach(function (key) {
                 if (!visiblePointKeys[key]) delete realtimePointValues[key];
@@ -490,7 +485,7 @@
                         qualityChanges.push({ key: valueKey, previous: previousState, next: qualityState });
                     }
                     return [
-                        '<span class="metric-chip ', qualityState === "status-ok" ? "" : "metric-chip-warn ", qualityState,
+                        '<span class="metric-chip ', valid ? '' : 'metric-chip-invalid ', qualityState === "status-ok" ? "" : "metric-chip-warn ", qualityState,
                         '" data-realtime-point-key="', escapeHtml(valueKey), '" data-quality-state="', escapeHtml(qualityState),
                         '" title="', escapeHtml(title), '">',
                         "<b>", escapeHtml(dataItemDisplayName(point.name, point.key)), "</b>",

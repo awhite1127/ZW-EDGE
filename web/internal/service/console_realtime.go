@@ -85,6 +85,7 @@ func (s *ConsoleService) LoadRealtime(ctx context.Context) model.RealtimeLoadRes
 		rows[index].SummaryText = userVisibleAlarmLimitText(rows[index].SummaryText)
 		rows[index].Diagnosis.Message = userVisibleAlarmLimitText(rows[index].Diagnosis.Message)
 		rows[index].Diagnosis.Suggestion = userVisibleAlarmLimitText(rows[index].Diagnosis.Suggestion)
+		rows[index].Explanation = RealtimeExplanation(rows[index])
 	}
 
 	// 根据最终行状态补充页面级警告并生成看板摘要。
@@ -99,6 +100,33 @@ func (s *ConsoleService) LoadRealtime(ctx context.Context) model.RealtimeLoadRes
 		BackendReachable:     reachable,
 		PrimaryDataAvailable: primaryAvailable,
 	}
+}
+
+// RealtimeExplanation 提供触屏可直接理解的短说明；说明不依赖展开或悬停操作。
+func RealtimeExplanation(row model.RealtimeRow) string {
+	message := strings.TrimSpace(row.ErrorMessage)
+	if message != "" {
+		code := strings.ToLower(row.Diagnosis.ErrorCode)
+		switch {
+		case code == "data_alarm":
+			return "数据超限，请检查设备"
+		case strings.Contains(code, "timeout") || strings.Contains(message, "超时"):
+			return "设备未响应，请检查连接"
+		case strings.Contains(message, "串口") && strings.Contains(message, "打开"):
+			return "串口不可用，请检查配置"
+		case strings.Contains(message, "无效") || strings.Contains(message, "解析"):
+			return "数据异常，请检查设备"
+		default:
+			return "采集异常，请检查设备"
+		}
+	}
+	if !row.HasStatus {
+		return "尚未采集，等待数据"
+	}
+	if !row.Online {
+		return "设备离线，请检查连接"
+	}
+	return "—"
 }
 
 // realtimeDeviceTemplates 复用低频变化的类型定义；后端 registry generation 是唯一失效信号。
@@ -635,7 +663,6 @@ func buildRealtimeRowFromConfig(
 		MasterName:              defaultString(master.MasterName, device.MasterID),
 		TemplateID:              templateID,
 		TemplateName:            templateName,
-		TemplateFields:          templateFields,
 		RealtimeGroupingEnabled: groupingEnabled,
 		HasStatus:               hasStatus,
 		HasRealtime:             hasRealtime,
